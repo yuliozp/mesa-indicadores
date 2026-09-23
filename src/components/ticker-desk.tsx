@@ -12,6 +12,7 @@ import {
   YAxis,
 } from "recharts";
 import { Search } from "lucide-react";
+import { Studies } from "@/components/studies";
 import { analyzeTicker } from "@/lib/market/analyze.functions";
 import type { Analysis, SideRange } from "@/lib/market/types";
 import { rsiZone } from "@/lib/market/math";
@@ -145,7 +146,7 @@ export function TickerDesk() {
               </div>
               <p className="text-right font-mono text-xl text-fg">{money(selected.price)}</p>
             </div>
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto overscroll-x-contain">
               <table className="w-full min-w-[860px] border-collapse text-left text-sm">
                 <thead>
                   <tr className="text-xs tracking-wide text-muted uppercase">
@@ -252,14 +253,45 @@ export function TickerDesk() {
 
           <p className="mt-3 text-xs leading-relaxed text-muted">{selected.note}</p>
 
+          <section className="mt-4 grid gap-3 sm:grid-cols-3">
+            <Stat
+              label="Próximas utilidades"
+              value={selected.calendar.earnings ?? "—"}
+              hint={
+                selected.calendar.earnings
+                  ? selected.calendar.earningsEstimate
+                    ? "Fecha estimada de resultados"
+                    : "Fecha de resultados anunciada"
+                  : "Sin fecha de resultados anunciada"
+              }
+            />
+            <Stat
+              label="Ex-date de dividendo"
+              value={selected.calendar.exDividend ?? "—"}
+              hint={
+                selected.calendar.exDividend
+                  ? selected.calendar.exDividendUpcoming
+                    ? "Próximo ex-date"
+                    : "Último ex-date. El siguiente aún no está declarado"
+                  : "Sin dividendo declarado"
+              }
+            />
+            <Stat
+              label="Próxima reunión de la Fed"
+              value={selected.calendar.fedLabel}
+              hint={selected.calendar.fedDetail}
+            />
+          </section>
+
           <IndicatorCharts row={selected} />
+          <Studies ticker={selected.ticker} initial={selected.overlay} />
         </>
       ) : null}
 
       <footer className="mt-10 border-t border-line pt-4 text-xs leading-relaxed text-muted">
-        Precio, 52 semanas, RSI, MACD y VWAP salen de Yahoo Finance. Índice, sector, target y
-        recomendación salen de Finviz (escala 1 compra fuerte → 5 venta fuerte). No es una
-        recomendación de compra o venta.
+        Precio, 52 semanas, RSI, MACD, VWAP, medias, Bollinger y Worden salen de Yahoo Finance.
+        Índice, sector, target y recomendación salen de Finviz. La reunión de la Fed es el calendario
+        oficial del FOMC. No es una recomendación de compra o venta.
       </footer>
     </main>
   );
@@ -328,7 +360,7 @@ function IndicatorCharts({ row }: { row: Analysis }) {
   return (
     <section className="mt-4 rounded-lg border border-line bg-surface px-2 py-3 sm:px-4">
       <h3 className="px-2 text-sm text-fg">Precio, MACD y RSI · diario</h3>
-      <div className="mt-2 h-48">
+      <div className="mt-2 h-48 overflow-hidden">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid stroke="var(--color-line)" vertical={false} />
@@ -343,7 +375,7 @@ function IndicatorCharts({ row }: { row: Analysis }) {
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-      <div className="h-36">
+      <div className="h-36 overflow-hidden">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid stroke="var(--color-line)" vertical={false} />
@@ -364,7 +396,7 @@ function IndicatorCharts({ row }: { row: Analysis }) {
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-      <div className="h-36">
+      <div className="h-36 overflow-hidden">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid stroke="var(--color-line)" vertical={false} />

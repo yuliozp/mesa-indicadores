@@ -21,6 +21,37 @@ export type ChartPoint = {
   hist: number | null;
 };
 
+export type IntervalId = "1m" | "5m" | "15m" | "1h" | "1d";
+
+export type OverlayPoint = {
+  t: string;
+  close: number;
+  ma20: number | null;
+  ma40: number | null;
+  ma100: number | null;
+  ma200: number | null;
+  bbMid: number | null;
+  bbUpper: number | null;
+  bbLower: number | null;
+  worden: number | null;
+};
+
+export type OverlaySeries = {
+  ticker: string;
+  interval: IntervalId;
+  label: string;
+  points: OverlayPoint[];
+};
+
+export type CalendarInfo = {
+  earnings: string | null;
+  earningsEstimate: boolean;
+  exDividend: string | null;
+  exDividendUpcoming: boolean;
+  fedLabel: string;
+  fedDetail: string;
+};
+
 export type Analysis = {
   ticker: string;
   name: string;
@@ -44,5 +75,7 @@ export type Analysis = {
   call: SideRange | null;
   put: SideRange | null;
   chart: ChartPoint[];
+  overlay: OverlaySeries;
+  calendar: CalendarInfo;
   note: string;
 };

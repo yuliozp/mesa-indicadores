@@ -11,6 +11,10 @@
   --color-put: #e3a54b;
   --color-up: #3ecf8e;
   --color-down: #f07178;
+  --color-ma20: #e6c84a;
+  --color-ma40: #e15b64;
+  --color-ma100: #3dbe6a;
+  --color-ma200: #b07cff;
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
   --radius-lg: 0.75rem;

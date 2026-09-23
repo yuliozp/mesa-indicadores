@@ -1,5 +1,6 @@
-import { contractRange, macdSeries, recomLabel, rsiWilder, vwapTypical } from "./math";
-import type { Analysis, ChartPoint, ContractRow, SideRange } from "./types";
+import https from "node:https";
+import { bollinger, contractRange, macdSeries, recomLabel, rsiWilder, sma, vwapTypical, wordenStochastic } from "./math";
+import type { Analysis, CalendarInfo, ChartPoint, ContractRow, IntervalId, OverlayPoint, OverlaySeries, SideRange } from "./types";
 
 export type { Analysis, ChartPoint, ContractRow, SideRange };
 
@@ -301,7 +302,7 @@ function etDate(unix: number): string {
 
 export async function analyzeTickerData(rawTicker: string): Promise<Analysis> {
   const ticker = rawTicker.trim().toUpperCase();
-  const daily = await yahooChart(ticker, "1d", "1y");
+  const daily = await yahooChart(ticker, "1d", "2y");
   if (!daily) throw new Error(`No encontré el ticker ${ticker}.`);
   const meta = daily.meta;
   const price = num(meta.regularMarketPrice);
@@ -353,6 +354,7 @@ export async function analyzeTickerData(rawTicker: string): Promise<Analysis> {
   }
 
   const snap = await finvizSnapshot(ticker);
+  const calendar = await loadCalendar(ticker, snap);
   const chain = await loadChain(ticker);
   const picked = pickExpiration(chain, expirationCutoff());
   let call: SideRange | null = null;
@@ -400,7 +402,217 @@ export async function analyzeTickerData(rawTicker: string): Promise<Analysis> {
     call,
     put,
     chart,
+    overlay: overlayFromBars(ticker, "1d", barsWithLiveClose(dailyBars(daily, false), today, price)),
+    calendar,
     note,
+  };
+}
+
+const INTERVALS: Record<IntervalId, { yahoo: string; range: string; take: number; label: string }> = {
+  "1m": { yahoo: "1m", range: "5d", take: 240, label: "1 minuto" },
+  "5m": { yahoo: "5m", range: "60d", take: 240, label: "5 minutos" },
+  "15m": { yahoo: "15m", range: "60d", take: 220, label: "15 minutos" },
+  "1h": { yahoo: "60m", range: "1y", take: 240, label: "1 hora" },
+  "1d": { yahoo: "1d", range: "2y", take: 280, label: "1 día" },
+};
+
+function stamp(unix: number, withTime: boolean): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(unix * 1000));
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  const day = `${get("year")}-${get("month")}-${get("day")}`;
+  return withTime ? `${day} ${get("hour")}:${get("minute")}` : day;
+}
+
+function dailyBars(chart: ChartResult, withTime: boolean): Array<{ t: string; close: number }> {
+  const out: Array<{ t: string; close: number }> = [];
+  chart.timestamps.forEach((ts, i) => {
+    const close = chart.quote[i]?.close;
+    if (close == null) return;
+    out.push({ t: stamp(ts, withTime), close });
+  });
+  return out;
+}
+
+function barsWithLiveClose(
+  bars: Array<{ t: string; close: number }>,
+  today: string,
+  price: number,
+): Array<{ t: string; close: number }> {
+  if (!bars.length || bars[bars.length - 1].t < today) return [...bars, { t: today, close: price }];
+  if (bars[bars.length - 1].t === today) {
+    const copy = bars.slice();
+    copy[copy.length - 1] = { t: today, close: price };
+    return copy;
+  }
+  return bars;
+}
+
+function roundTo(n: number | null, digits: number): number | null {
+  if (n == null || Number.isNaN(n)) return null;
+  const p = 10 ** digits;
+  return Math.round(n * p) / p;
+}
+
+export function overlayFromBars(
+  ticker: string,
+  interval: IntervalId,
+  bars: Array<{ t: string; close: number }>,
+): OverlaySeries {
+  const spec = INTERVALS[interval];
+  const closes = bars.map((b) => b.close);
+  const ma20 = sma(closes, 20);
+  const ma40 = sma(closes, 40);
+  const ma100 = sma(closes, 100);
+  const ma200 = sma(closes, 200);
+  const bb = bollinger(closes, 20, 2);
+  const worden = wordenStochastic(closes, 14, 3);
+  const start = Math.max(0, bars.length - spec.take);
+  const points: OverlayPoint[] = [];
+  for (let i = start; i < bars.length; i++) {
+    points.push({
+      t: bars[i].t,
+      close: roundTo(bars[i].close, 4) as number,
+      ma20: roundTo(ma20[i], 4),
+      ma40: roundTo(ma40[i], 4),
+      ma100: roundTo(ma100[i], 4),
+      ma200: roundTo(ma200[i], 4),
+      bbMid: roundTo(bb.mid[i], 4),
+      bbUpper: roundTo(bb.upper[i], 4),
+      bbLower: roundTo(bb.lower[i], 4),
+      worden: roundTo(worden[i], 2),
+    });
+  }
+  return { ticker, interval, label: spec.label, points };
+}
+
+export function isInterval(value: string): value is IntervalId {
+  return value === "1m" || value === "5m" || value === "15m" || value === "1h" || value === "1d";
+}
+
+export async function loadOverlaySeries(ticker: string, interval: IntervalId): Promise<OverlaySeries> {
+  const spec = INTERVALS[interval];
+  const chart = await yahooChart(ticker, spec.yahoo, spec.range);
+  if (!chart) throw new Error(`No hay velas de ${spec.label} para ${ticker}.`);
+  const withTime = interval !== "1d";
+  let bars = dailyBars(chart, withTime);
+  if (interval === "1d") {
+    const price = num(chart.meta.regularMarketPrice);
+    const today = etDate(Math.floor(Date.now() / 1000));
+    if (price != null) bars = barsWithLiveClose(bars, today, price);
+  }
+  if (bars.length < 20) throw new Error(`Muy pocas velas de ${spec.label} para armar las medias.`);
+  return overlayFromBars(ticker, interval, bars);
+}
+
+const FOMC: Array<[string, string]> = [
+  ["2026-10-27", "2026-10-28"],
+  ["2026-12-08", "2026-12-09"],
+  ["2027-01-26", "2027-01-27"],
+  ["2027-03-16", "2027-03-17"],
+  ["2027-04-27", "2027-04-28"],
+  ["2027-06-08", "2027-06-09"],
+  ["2027-07-27", "2027-07-28"],
+  ["2027-09-14", "2027-09-15"],
+  ["2027-10-26", "2027-10-27"],
+  ["2027-12-07", "2027-12-08"],
+];
+
+const MONTHS_ES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+const MONTHS_EN: Record<string, number> = {
+  Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6,
+  Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12,
+};
+
+function fmtIso(iso: string): string {
+  const [y, m, d] = iso.split("-");
+  return `${Number(d)} ${MONTHS_ES[Number(m) - 1]} ${y}`;
+}
+
+function parseLooseDate(raw: string): string | null {
+  const m = /([A-Za-z]{3})\s+(\d{1,2}),\s+(\d{4})/.exec(raw);
+  if (!m || !MONTHS_EN[m[1]]) return null;
+  return `${m[3]}-${String(MONTHS_EN[m[1]]).padStart(2, "0")}-${String(Number(m[2])).padStart(2, "0")}`;
+}
+
+function nextFed(today: string): Pick<CalendarInfo, "fedLabel" | "fedDetail"> {
+  const next = FOMC.find(([, end]) => end >= today) ?? FOMC[FOMC.length - 1];
+  const [start, end] = next;
+  const label =
+    start.slice(0, 7) === end.slice(0, 7)
+      ? `${Number(start.slice(8))}–${fmtIso(end)}`
+      : `${fmtIso(start)} – ${fmtIso(end)}`;
+  return {
+    fedLabel: label,
+    fedDetail: `Decisión el ${fmtIso(end)} a las 14:00 ET. Calendario oficial del FOMC.`,
+  };
+}
+
+function getText(url: string, redirects = 0): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      url,
+      {
+        headers: { "User-Agent": UA, Accept: "text/html", "Accept-Language": "en-US,en;q=0.9" },
+        maxHeaderSize: 256 * 1024,
+      },
+      (res) => {
+        const code = res.statusCode ?? 0;
+        const location = res.headers.location;
+        if (code >= 300 && code < 400 && location && redirects < 3) {
+          res.resume();
+          getText(new URL(location, url).toString(), redirects + 1).then(resolve, reject);
+          return;
+        }
+        if (code < 200 || code >= 300) {
+          res.resume();
+          reject(new Error(`Fuente no disponible (${code})`));
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+      },
+    );
+    req.on("error", reject);
+    req.setTimeout(18000, () => req.destroy(new Error("timeout")));
+  });
+}
+
+async function loadCalendar(ticker: string, snap: Record<string, string>): Promise<CalendarInfo> {
+  const today = etDate(Math.floor(Date.now() / 1000));
+  const fed = nextFed(today);
+  let earningsIso: string | null = null;
+  let earningsEstimate = false;
+  let exIso: string | null = null;
+  try {
+    const html = await getText(`https://finance.yahoo.com/quote/${encodeURIComponent(ticker)}/`);
+    const earn = html.match(/earningsDate\\":\[\{\\"raw\\":\d+,\\"fmt\\":\\"([0-9-]+)\\"/);
+    const est = html.match(/isEarningsDateEstimate\\":(true|false)/);
+    const ex = html.match(/exDividendDate\\":\{\\"raw\\":\d+,\\"fmt\\":\\"([0-9-]+)\\"/);
+    if (earn) {
+      earningsIso = earn[1];
+      earningsEstimate = est?.[1] === "true";
+    }
+    if (ex) exIso = ex[1];
+  } catch {
+    /* sigue con Finviz */
+  }
+  if (!exIso && snap["Dividend Ex-Date"]) exIso = parseLooseDate(snap["Dividend Ex-Date"]);
+  if (!earningsIso && snap.Earnings) earningsIso = parseLooseDate(snap.Earnings);
+  return {
+    earnings: earningsIso ? fmtIso(earningsIso) : null,
+    earningsEstimate,
+    exDividend: exIso ? fmtIso(exIso) : null,
+    exDividendUpcoming: exIso != null && exIso >= today,
+    ...fed,
   };
 }
 

@@ -106,3 +106,71 @@ export function rsiZone(value: number | null): string | null {
   if (value >= 50) return "Sesgo alcista";
   return "Sesgo bajista";
 }
+
+export function sma(values: number[], n: number): Array<number | null> {
+  const out: Array<number | null> = Array(values.length).fill(null);
+  if (n < 1 || values.length < n) return out;
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i];
+    if (i >= n) sum -= values[i - n];
+    if (i >= n - 1) out[i] = sum / n;
+  }
+  return out;
+}
+
+/** Bandas de Bollinger: media n y ±k desviaciones del cierre. */
+export function bollinger(
+  closes: number[],
+  n = 20,
+  k = 2,
+): { mid: Array<number | null>; upper: Array<number | null>; lower: Array<number | null> } {
+  const mid = sma(closes, n);
+  const upper: Array<number | null> = Array(closes.length).fill(null);
+  const lower: Array<number | null> = Array(closes.length).fill(null);
+  for (let i = n - 1; i < closes.length; i++) {
+    const mean = mid[i];
+    if (mean == null) continue;
+    let acc = 0;
+    for (let j = i - n + 1; j <= i; j++) {
+      const d = closes[j] - mean;
+      acc += d * d;
+    }
+    const sd = Math.sqrt(acc / n);
+    upper[i] = mean + k * sd;
+    lower[i] = mean - k * sd;
+  }
+  return { mid, upper, lower };
+}
+
+/**
+ * Worden Stochastic (TC2000): percentil del cierre dentro de las últimas n
+ * observaciones. Rank 0 es el más bajo. (100 / (n - 1)) × Rank.
+ * Luego se suaviza con una media simple.
+ */
+export function wordenStochastic(closes: number[], period = 14, smooth = 3): Array<number | null> {
+  const raw: Array<number | null> = Array(closes.length).fill(null);
+  for (let i = period - 1; i < closes.length; i++) {
+    const current = closes[i];
+    let rank = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      if (closes[j] < current) rank += 1;
+    }
+    raw[i] = period <= 1 ? 100 : (100 / (period - 1)) * rank;
+  }
+  if (smooth <= 1) return raw;
+  const out: Array<number | null> = Array(closes.length).fill(null);
+  for (let i = 0; i < closes.length; i++) {
+    let sum = 0;
+    let ok = true;
+    for (let j = i - smooth + 1; j <= i; j++) {
+      if (j < 0 || raw[j] == null) {
+        ok = false;
+        break;
+      }
+      sum += raw[j] as number;
+    }
+    if (ok) out[i] = sum / smooth;
+  }
+  return out;
+}
