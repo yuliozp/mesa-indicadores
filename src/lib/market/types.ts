@@ -23,9 +23,15 @@ export type ChartPoint = {
 
 export type IntervalId = "1m" | "5m" | "15m" | "1h" | "1d";
 
+export type RangeId = "1d" | "1w" | "1mo" | "3mo" | "6mo" | "1y" | "ytd";
+
 export type OverlayPoint = {
   t: string;
+  open: number;
+  high: number;
+  low: number;
   close: number;
+  volume: number;
   ma20: number | null;
   ma40: number | null;
   ma100: number | null;

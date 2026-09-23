@@ -10,6 +10,7 @@ const UA =
 const MIN_PREMIUM = 0.3;
 
 type QuoteBar = {
+  open: number | null;
   high: number | null;
   low: number | null;
   close: number | null;
@@ -57,6 +58,7 @@ function readChart(payload: unknown): ChartResult | null {
   const q = result.indicators?.quote?.[0] ?? {};
   const ts = result.timestamp ?? [];
   const quote: QuoteBar[] = ts.map((_, i) => ({
+    open: q.open?.[i] ?? null,
     high: q.high?.[i] ?? null,
     low: q.low?.[i] ?? null,
     close: q.close?.[i] ?? null,
@@ -302,7 +304,7 @@ function etDate(unix: number): string {
 
 export async function analyzeTickerData(rawTicker: string): Promise<Analysis> {
   const ticker = rawTicker.trim().toUpperCase();
-  const daily = await yahooChart(ticker, "1d", "2y");
+  const daily = await yahooChart(ticker, "1d", "5y");
   if (!daily) throw new Error(`No encontré el ticker ${ticker}.`);
   const meta = daily.meta;
   const price = num(meta.regularMarketPrice);
@@ -402,18 +404,18 @@ export async function analyzeTickerData(rawTicker: string): Promise<Analysis> {
     call,
     put,
     chart,
-    overlay: overlayFromBars(ticker, "1d", barsWithLiveClose(dailyBars(daily, false), today, price)),
+    overlay: overlayFromBars(ticker, "1d", barsWithLiveClose(ohlcBars(daily, false), today, price)),
     calendar,
     note,
   };
 }
 
-const INTERVALS: Record<IntervalId, { yahoo: string; range: string; take: number; label: string }> = {
-  "1m": { yahoo: "1m", range: "5d", take: 240, label: "1 minuto" },
-  "5m": { yahoo: "5m", range: "60d", take: 240, label: "5 minutos" },
-  "15m": { yahoo: "15m", range: "60d", take: 220, label: "15 minutos" },
-  "1h": { yahoo: "60m", range: "1y", take: 240, label: "1 hora" },
-  "1d": { yahoo: "1d", range: "2y", take: 280, label: "1 día" },
+const INTERVALS: Record<IntervalId, { yahoo: string; range: string; label: string }> = {
+  "1m": { yahoo: "1m", range: "5d", label: "1 minuto" },
+  "5m": { yahoo: "5m", range: "60d", label: "5 minutos" },
+  "15m": { yahoo: "15m", range: "60d", label: "15 minutos" },
+  "1h": { yahoo: "60m", range: "2y", label: "1 hora" },
+  "1d": { yahoo: "1d", range: "5y", label: "1 día" },
 };
 
 function stamp(unix: number, withTime: boolean): string {
@@ -431,25 +433,35 @@ function stamp(unix: number, withTime: boolean): string {
   return withTime ? `${day} ${get("hour")}:${get("minute")}` : day;
 }
 
-function dailyBars(chart: ChartResult, withTime: boolean): Array<{ t: string; close: number }> {
-  const out: Array<{ t: string; close: number }> = [];
+type Bar = { t: string; open: number; high: number; low: number; close: number; volume: number };
+
+function ohlcBars(chart: ChartResult, withTime: boolean): Bar[] {
+  const out: Bar[] = [];
   chart.timestamps.forEach((ts, i) => {
-    const close = chart.quote[i]?.close;
-    if (close == null) return;
-    out.push({ t: stamp(ts, withTime), close });
+    const q = chart.quote[i];
+    if (q?.close == null) return;
+    const close = q.close;
+    const open = q.open ?? close;
+    const high = Math.max(q.high ?? close, open, close);
+    const low = Math.min(q.low ?? close, open, close);
+    out.push({ t: stamp(ts, withTime), open, high, low, close, volume: q.volume ?? 0 });
   });
   return out;
 }
 
-function barsWithLiveClose(
-  bars: Array<{ t: string; close: number }>,
-  today: string,
-  price: number,
-): Array<{ t: string; close: number }> {
-  if (!bars.length || bars[bars.length - 1].t < today) return [...bars, { t: today, close: price }];
-  if (bars[bars.length - 1].t === today) {
+function barsWithLiveClose(bars: Bar[], today: string, price: number): Bar[] {
+  if (!bars.length || bars[bars.length - 1].t.slice(0, 10) < today) {
+    return [...bars, { t: today, open: price, high: price, low: price, close: price, volume: 0 }];
+  }
+  if (bars[bars.length - 1].t.slice(0, 10) === today) {
     const copy = bars.slice();
-    copy[copy.length - 1] = { t: today, close: price };
+    const last = copy[copy.length - 1];
+    copy[copy.length - 1] = {
+      ...last,
+      close: price,
+      high: Math.max(last.high, price),
+      low: Math.min(last.low, price),
+    };
     return copy;
   }
   return bars;
@@ -461,11 +473,7 @@ function roundTo(n: number | null, digits: number): number | null {
   return Math.round(n * p) / p;
 }
 
-export function overlayFromBars(
-  ticker: string,
-  interval: IntervalId,
-  bars: Array<{ t: string; close: number }>,
-): OverlaySeries {
+export function overlayFromBars(ticker: string, interval: IntervalId, bars: Bar[]): OverlaySeries {
   const spec = INTERVALS[interval];
   const closes = bars.map((b) => b.close);
   const ma20 = sma(closes, 20);
@@ -474,22 +482,22 @@ export function overlayFromBars(
   const ma200 = sma(closes, 200);
   const bb = bollinger(closes, 20, 2);
   const worden = wordenStochastic(closes, 14, 3);
-  const start = Math.max(0, bars.length - spec.take);
-  const points: OverlayPoint[] = [];
-  for (let i = start; i < bars.length; i++) {
-    points.push({
-      t: bars[i].t,
-      close: roundTo(bars[i].close, 4) as number,
-      ma20: roundTo(ma20[i], 4),
-      ma40: roundTo(ma40[i], 4),
-      ma100: roundTo(ma100[i], 4),
-      ma200: roundTo(ma200[i], 4),
-      bbMid: roundTo(bb.mid[i], 4),
-      bbUpper: roundTo(bb.upper[i], 4),
-      bbLower: roundTo(bb.lower[i], 4),
-      worden: roundTo(worden[i], 2),
-    });
-  }
+  const points: OverlayPoint[] = bars.map((bar, i) => ({
+    t: bar.t,
+    open: roundTo(bar.open, 4) as number,
+    high: roundTo(bar.high, 4) as number,
+    low: roundTo(bar.low, 4) as number,
+    close: roundTo(bar.close, 4) as number,
+    volume: Math.round(bar.volume),
+    ma20: roundTo(ma20[i], 4),
+    ma40: roundTo(ma40[i], 4),
+    ma100: roundTo(ma100[i], 4),
+    ma200: roundTo(ma200[i], 4),
+    bbMid: roundTo(bb.mid[i], 4),
+    bbUpper: roundTo(bb.upper[i], 4),
+    bbLower: roundTo(bb.lower[i], 4),
+    worden: roundTo(worden[i], 2),
+  }));
   return { ticker, interval, label: spec.label, points };
 }
 
@@ -499,10 +507,11 @@ export function isInterval(value: string): value is IntervalId {
 
 export async function loadOverlaySeries(ticker: string, interval: IntervalId): Promise<OverlaySeries> {
   const spec = INTERVALS[interval];
-  const chart = await yahooChart(ticker, spec.yahoo, spec.range);
+  let chart = await yahooChart(ticker, spec.yahoo, spec.range);
+  if (!chart && interval === "1h") chart = await yahooChart(ticker, "60m", "1y");
   if (!chart) throw new Error(`No hay velas de ${spec.label} para ${ticker}.`);
   const withTime = interval !== "1d";
-  let bars = dailyBars(chart, withTime);
+  let bars = ohlcBars(chart, withTime);
   if (interval === "1d") {
     const price = num(chart.meta.regularMarketPrice);
     const today = etDate(Math.floor(Date.now() / 1000));

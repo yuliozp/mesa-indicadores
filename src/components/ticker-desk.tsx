@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useCallback, useState, type FormEvent } from "react";
 import {
   Bar,
   CartesianGrid,
@@ -12,7 +12,7 @@ import {
   YAxis,
 } from "recharts";
 import { Search } from "lucide-react";
-import { Studies } from "@/components/studies";
+import { ChartLightbox, Studies } from "@/components/studies";
 import { analyzeTicker } from "@/lib/market/analyze.functions";
 import type { Analysis, SideRange } from "@/lib/market/types";
 import { rsiZone } from "@/lib/market/math";
@@ -48,6 +48,11 @@ function fmtDate(iso: string | null): string {
 function sectorLine(row: Analysis): string {
   const parts = [row.sector, row.industry].filter(Boolean);
   return parts.length ? parts.join(" · ") : "—";
+}
+
+function priceClass(price: number, previous: number | null): string {
+  if (previous != null && price > previous) return "text-up";
+  return "text-fg";
 }
 
 function recomClass(value: number | null): string {
@@ -144,7 +149,9 @@ export function TickerDesk() {
                 <h2 className="font-mono text-lg text-fg">{selected.ticker}</h2>
                 <p className="text-sm text-muted">{selected.name}</p>
               </div>
-              <p className="text-right font-mono text-xl text-fg">{money(selected.price)}</p>
+              <p className={`text-right font-mono text-xl ${priceClass(selected.price, selected.previousClose)}`}>
+                {money(selected.price)}
+              </p>
             </div>
             <div className="overflow-x-auto overscroll-x-contain">
               <table className="w-full min-w-[860px] border-collapse text-left text-sm">
@@ -186,7 +193,9 @@ export function TickerDesk() {
                         <td className="max-w-48 px-3 py-3 text-muted">{sectorLine(row)}</td>
                         <td className="px-3 py-3 font-mono whitespace-nowrap">{money(row.high52)}</td>
                         <td className="px-3 py-3 font-mono whitespace-nowrap">{money(row.low52)}</td>
-                        <td className="px-3 py-3 font-mono whitespace-nowrap">{money(row.price)}</td>
+                        <td className={`px-3 py-3 font-mono whitespace-nowrap ${priceClass(row.price, row.previousClose)}`}>
+                          {money(row.price)}
+                        </td>
                         <td className="px-3 py-3 font-mono whitespace-nowrap">
                           {row.rsi == null ? "—" : row.rsi.toFixed(1)}
                         </td>
@@ -267,12 +276,18 @@ export function TickerDesk() {
             />
             <Stat
               label="Ex-date de dividendo"
-              value={selected.calendar.exDividend ?? "—"}
+              value={
+                selected.calendar.exDividend
+                  ? selected.calendar.exDividendUpcoming
+                    ? selected.calendar.exDividend
+                    : `${selected.calendar.exDividend}*`
+                  : "—"
+              }
               hint={
                 selected.calendar.exDividend
                   ? selected.calendar.exDividendUpcoming
                     ? "Próximo ex-date"
-                    : "Último ex-date. El siguiente aún no está declarado"
+                    : "* El siguiente ex-date aún no está declarado. Se muestra el último."
                   : "Sin dividendo declarado"
               }
             />
@@ -355,12 +370,44 @@ function RangeCard({
 }
 
 function IndicatorCharts({ row }: { row: Analysis }) {
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
   const data = row.chart.filter((p) => p.rsi != null);
   if (data.length < 5) return null;
   return (
-    <section className="mt-4 rounded-lg border border-line bg-surface px-2 py-3 sm:px-4">
+    <>
+      <p className="mt-4 text-xs text-muted">Toca el gráfico diario para ampliarlo.</p>
+      <section
+        className="mt-2 cursor-pointer rounded-lg border border-line bg-surface px-2 py-3 sm:px-4"
+        role="button"
+        tabIndex={0}
+        aria-label="Ampliar precio, MACD y RSI"
+        onClick={() => setOpen(true)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
+      >
+        <DailyStack data={data} tall={false} />
+      </section>
+      {open ? (
+        <ChartLightbox title="Precio, MACD y RSI · diario" onClose={close}>
+          <DailyStack data={data} tall />
+        </ChartLightbox>
+      ) : null}
+    </>
+  );
+}
+
+function DailyStack({ data, tall }: { data: Analysis["chart"]; tall: boolean }) {
+  const priceH = tall ? "h-72" : "h-48";
+  const oscH = tall ? "h-48" : "h-36";
+  return (
+    <>
       <h3 className="px-2 text-sm text-fg">Precio, MACD y RSI · diario</h3>
-      <div className="mt-2 h-48 overflow-hidden">
+      <div className={`mt-2 overflow-hidden ${priceH}`}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid stroke="var(--color-line)" vertical={false} />
@@ -375,7 +422,7 @@ function IndicatorCharts({ row }: { row: Analysis }) {
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-      <div className="h-36 overflow-hidden">
+      <div className={`overflow-hidden ${oscH}`}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid stroke="var(--color-line)" vertical={false} />
@@ -396,7 +443,7 @@ function IndicatorCharts({ row }: { row: Analysis }) {
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-      <div className="h-36 overflow-hidden">
+      <div className={`overflow-hidden ${oscH}`}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid stroke="var(--color-line)" vertical={false} />
@@ -412,6 +459,6 @@ function IndicatorCharts({ row }: { row: Analysis }) {
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-    </section>
+    </>
   );
 }
