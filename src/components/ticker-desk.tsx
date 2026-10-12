@@ -1,4 +1,4 @@
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Bar,
   CartesianGrid,
@@ -67,8 +67,8 @@ function tickLabel(iso: string): string {
   return `${d}/${m}`;
 }
 
-export function TickerDesk() {
-  const [query, setQuery] = useState("QQQI");
+export function TickerDesk({ initialTicker }: { initialTicker?: string } = {}) {
+  const [query, setQuery] = useState(initialTicker || "QQQI");
   const [rows, setRows] = useState<Analysis[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -76,9 +76,22 @@ export function TickerDesk() {
 
   const selected = rows.find((r) => r.ticker === active) ?? rows[0] ?? null;
 
+  const started = useRef(false);
+  useEffect(() => {
+    if (initialTicker && !started.current) {
+      started.current = true;
+      void run(initialTicker);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTicker]);
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
-    const ticker = query.trim().toUpperCase();
+    await run(query);
+  }
+
+  async function run(raw: string) {
+    const ticker = raw.trim().toUpperCase();
     if (!ticker || pending) return;
     setPending(true);
     setError(null);
@@ -95,7 +108,7 @@ export function TickerDesk() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
+    <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
       <header className="mb-6 max-w-3xl">
         <p className="font-mono text-xs tracking-widest text-call uppercase">NYSE · NASDAQ</p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight text-fg">Mesa de indicadores</h1>
@@ -143,163 +156,8 @@ export function TickerDesk() {
 
       {selected ? (
         <>
-          <section className="overflow-hidden rounded-lg border border-line bg-surface">
-            <div className="flex items-baseline justify-between gap-3 border-b border-line px-4 py-3">
-              <div>
-                <h2 className="font-mono text-lg text-fg">{selected.ticker}</h2>
-                <p className="text-sm text-muted">{selected.name}</p>
-              </div>
-              <p className={`text-right font-mono text-xl ${priceClass(selected.price, selected.previousClose)}`}>
-                {money(selected.price)}
-              </p>
-            </div>
-            <div className="overflow-x-auto overscroll-x-contain">
-              <table className="w-full min-w-[860px] border-collapse text-left text-sm">
-                <thead>
-                  <tr className="text-xs tracking-wide text-muted uppercase">
-                    {[
-                      "Ticker",
-                      "Índices",
-                      "Sector",
-                      "Máx. anual",
-                      "Mín. anual",
-                      "Precio",
-                      "RSI",
-                      "VWAP",
-                      "MACD",
-                      "Target",
-                      "Recom",
-                      "Fecha de cierre",
-                      "Rango call",
-                      "Rango put",
-                    ].map((label) => (
-                      <th key={label} className="px-3 py-2 font-medium whitespace-nowrap">
-                        {label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => {
-                    const on = row.ticker === selected.ticker;
-                    return (
-                      <tr
-                        key={row.ticker}
-                        onClick={() => setActive(row.ticker)}
-                        className={on ? "bg-inset" : "hover:bg-inset/60"}
-                      >
-                        <td className="px-3 py-3 font-mono font-medium whitespace-nowrap">{row.ticker}</td>
-                        <td className="px-3 py-3 whitespace-nowrap text-muted">{row.indices ?? "—"}</td>
-                        <td className="max-w-48 px-3 py-3 text-muted">{sectorLine(row)}</td>
-                        <td className="px-3 py-3 font-mono whitespace-nowrap">{money(row.high52)}</td>
-                        <td className="px-3 py-3 font-mono whitespace-nowrap">{money(row.low52)}</td>
-                        <td className={`px-3 py-3 font-mono whitespace-nowrap ${priceClass(row.price, row.previousClose)}`}>
-                          {money(row.price)}
-                        </td>
-                        <td className="px-3 py-3 font-mono whitespace-nowrap">
-                          {row.rsi == null ? "—" : row.rsi.toFixed(1)}
-                        </td>
-                        <td className="px-3 py-3 font-mono whitespace-nowrap">{money(row.vwap)}</td>
-                        <td className="px-3 py-3 font-mono whitespace-nowrap">
-                          {row.macd == null ? "—" : row.macd.toFixed(2)}
-                        </td>
-                        <td className="px-3 py-3 font-mono whitespace-nowrap">{money(row.targetPrice)}</td>
-                        <td className={`px-3 py-3 whitespace-nowrap ${recomClass(row.recom)}`}>
-                          {row.recom == null ? "—" : `${row.recom.toFixed(2)} ${row.recomLabel ?? ""}`}
-                        </td>
-                        <td className="px-3 py-3 whitespace-nowrap">{fmtDate(row.expiration)}</td>
-                        <td className="px-3 py-3 font-mono whitespace-nowrap text-call">
-                          {rangeLabel(row.call)}
-                        </td>
-                        <td className="px-3 py-3 font-mono whitespace-nowrap text-put">
-                          {rangeLabel(row.put)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Stat
-              label="RSI (14)"
-              value={selected.rsi == null ? "—" : selected.rsi.toFixed(1)}
-              hint={rsiZone(selected.rsi) ?? "Diario, método Wilder"}
-            />
-            <Stat
-              label="VWAP de la sesión"
-              value={money(selected.vwap)}
-              hint={
-                selected.vwap == null
-                  ? "Sin volumen intradía"
-                  : selected.price >= selected.vwap
-                    ? "El precio cierra sobre el VWAP"
-                    : "El precio cierra bajo el VWAP"
-              }
-            />
-            <Stat
-              label="MACD 12, 26, 9"
-              value={selected.macd == null ? "—" : selected.macd.toFixed(2)}
-              hint={
-                selected.macdSignal == null
-                  ? "Diario"
-                  : `Señal ${selected.macdSignal.toFixed(2)} · hist ${selected.macdHist?.toFixed(2) ?? "—"}`
-              }
-            />
-            <Stat
-              label="Fecha de cierre"
-              value={fmtDate(selected.expiration)}
-              hint="Vencimiento usado para call y put"
-            />
-          </section>
-
-          <section className="mt-4 grid gap-3 lg:grid-cols-2">
-            <RangeCard title="Rango call" tone="call" side={selected.call} />
-            <RangeCard title="Rango put" tone="put" side={selected.put} />
-          </section>
-
-          <p className="mt-3 text-xs leading-relaxed text-muted">{selected.note}</p>
-
-          <section className="mt-4 grid gap-3 sm:grid-cols-3">
-            <Stat
-              label="Próximas utilidades"
-              value={selected.calendar.earnings ?? "—"}
-              hint={
-                selected.calendar.earnings
-                  ? selected.calendar.earningsEstimate
-                    ? "Fecha estimada de resultados"
-                    : "Fecha de resultados anunciada"
-                  : "Sin fecha de resultados anunciada"
-              }
-            />
-            <Stat
-              label="Ex-date de dividendo"
-              value={
-                selected.calendar.exDividend
-                  ? selected.calendar.exDividendUpcoming
-                    ? selected.calendar.exDividend
-                    : `${selected.calendar.exDividend}*`
-                  : "—"
-              }
-              hint={
-                selected.calendar.exDividend
-                  ? selected.calendar.exDividendUpcoming
-                    ? "Próximo ex-date"
-                    : "* El siguiente ex-date aún no está declarado. Se muestra el último."
-                  : "Sin dividendo declarado"
-              }
-            />
-            <Stat
-              label="Próxima reunión de la Fed"
-              value={selected.calendar.fedLabel}
-              hint={selected.calendar.fedDetail}
-            />
-          </section>
-
-          <IndicatorCharts row={selected} />
-          <Studies ticker={selected.ticker} initial={selected.overlay} />
+          <DeskTable rows={rows} selected={selected} onPick={setActive} />
+          <DeskDetail row={selected} />
         </>
       ) : null}
 
@@ -309,6 +167,171 @@ export function TickerDesk() {
         oficial del FOMC. No es una recomendación de compra o venta.
       </footer>
     </main>
+  );
+}
+
+export function DeskTable({
+  rows,
+  selected,
+  onPick,
+}: {
+  rows: Analysis[];
+  selected: Analysis;
+  onPick?: (ticker: string) => void;
+}) {
+  return (
+    <section className="overflow-hidden rounded-lg border border-line bg-surface">
+      <div className="flex items-baseline justify-between gap-3 border-b border-line px-4 py-3">
+        <div>
+          <h2 className="font-mono text-lg text-fg">{selected.ticker}</h2>
+          <p className="text-sm text-muted">{selected.name}</p>
+        </div>
+        <p className={`text-right font-mono text-xl ${priceClass(selected.price, selected.previousClose)}`}>
+          {money(selected.price)}
+        </p>
+      </div>
+      <div className="overflow-x-auto overscroll-x-contain">
+        <table className="w-full min-w-[860px] border-collapse text-left text-sm">
+          <thead>
+            <tr className="text-xs tracking-wide text-muted uppercase">
+              {[
+                "Ticker",
+                "Índices",
+                "Sector",
+                "Máx. anual",
+                "Mín. anual",
+                "Precio",
+                "RSI",
+                "VWAP",
+                "MACD",
+                "Target",
+                "Recom",
+                "Fecha de cierre",
+                "Rango call",
+                "Rango put",
+              ].map((label) => (
+                <th key={label} className="px-3 py-2 font-medium whitespace-nowrap">
+                  {label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const on = row.ticker === selected.ticker;
+              return (
+                <tr
+                  key={row.ticker}
+                  onClick={onPick ? () => onPick(row.ticker) : undefined}
+                  className={on ? "bg-inset" : "hover:bg-inset/60"}
+                >
+                  <td className="px-3 py-3 font-mono font-medium whitespace-nowrap">{row.ticker}</td>
+                  <td className="px-3 py-3 whitespace-nowrap text-muted">{row.indices ?? "—"}</td>
+                  <td className="max-w-48 px-3 py-3 text-muted">{sectorLine(row)}</td>
+                  <td className="px-3 py-3 font-mono whitespace-nowrap">{money(row.high52)}</td>
+                  <td className="px-3 py-3 font-mono whitespace-nowrap">{money(row.low52)}</td>
+                  <td className={`px-3 py-3 font-mono whitespace-nowrap ${priceClass(row.price, row.previousClose)}`}>
+                    {money(row.price)}
+                  </td>
+                  <td className="px-3 py-3 font-mono whitespace-nowrap">
+                    {row.rsi == null ? "—" : row.rsi.toFixed(1)}
+                  </td>
+                  <td className="px-3 py-3 font-mono whitespace-nowrap">{money(row.vwap)}</td>
+                  <td className="px-3 py-3 font-mono whitespace-nowrap">
+                    {row.macd == null ? "—" : row.macd.toFixed(2)}
+                  </td>
+                  <td className="px-3 py-3 font-mono whitespace-nowrap">{money(row.targetPrice)}</td>
+                  <td className={`px-3 py-3 whitespace-nowrap ${recomClass(row.recom)}`}>
+                    {row.recom == null ? "—" : `${row.recom.toFixed(2)} ${row.recomLabel ?? ""}`}
+                  </td>
+                  <td className="px-3 py-3 whitespace-nowrap">{fmtDate(row.expiration)}</td>
+                  <td className="px-3 py-3 font-mono whitespace-nowrap text-call">{rangeLabel(row.call)}</td>
+                  <td className="px-3 py-3 font-mono whitespace-nowrap text-put">{rangeLabel(row.put)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+/** Todo lo que la mesa muestra de un ticker debajo de la tabla. */
+export function DeskDetail({ row: selected }: { row: Analysis }) {
+  return (
+    <>
+      <section className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Stat
+          label="RSI (14)"
+          value={selected.rsi == null ? "—" : selected.rsi.toFixed(1)}
+          hint={rsiZone(selected.rsi) ?? "Diario, método Wilder"}
+        />
+        <Stat
+          label="VWAP de la sesión"
+          value={money(selected.vwap)}
+          hint={
+            selected.vwap == null
+              ? "Sin volumen intradía"
+              : selected.price >= selected.vwap
+                ? "El precio cierra sobre el VWAP"
+                : "El precio cierra bajo el VWAP"
+          }
+        />
+        <Stat
+          label="MACD 12, 26, 9"
+          value={selected.macd == null ? "—" : selected.macd.toFixed(2)}
+          hint={
+            selected.macdSignal == null
+              ? "Diario"
+              : `Señal ${selected.macdSignal.toFixed(2)} · hist ${selected.macdHist?.toFixed(2) ?? "—"}`
+          }
+        />
+        <Stat label="Fecha de cierre" value={fmtDate(selected.expiration)} hint="Vencimiento usado para call y put" />
+      </section>
+
+      <section className="mt-4 grid gap-3 lg:grid-cols-2">
+        <RangeCard title="Rango call" tone="call" side={selected.call} />
+        <RangeCard title="Rango put" tone="put" side={selected.put} />
+      </section>
+
+      <p className="mt-3 text-xs leading-relaxed text-muted">{selected.note}</p>
+
+      <section className="mt-4 grid gap-3 sm:grid-cols-3">
+        <Stat
+          label="Próximas utilidades"
+          value={selected.calendar.earnings ?? "—"}
+          hint={
+            selected.calendar.earnings
+              ? selected.calendar.earningsEstimate
+                ? "Fecha estimada de resultados"
+                : "Fecha de resultados anunciada"
+              : "Sin fecha de resultados anunciada"
+          }
+        />
+        <Stat
+          label="Ex-date de dividendo"
+          value={
+            selected.calendar.exDividend
+              ? selected.calendar.exDividendUpcoming
+                ? selected.calendar.exDividend
+                : `${selected.calendar.exDividend}*`
+              : "—"
+          }
+          hint={
+            selected.calendar.exDividend
+              ? selected.calendar.exDividendUpcoming
+                ? "Próximo ex-date"
+                : "* El siguiente ex-date aún no está declarado. Se muestra el último."
+              : "Sin dividendo declarado"
+          }
+        />
+        <Stat label="Próxima reunión de la Fed" value={selected.calendar.fedLabel} hint={selected.calendar.fedDetail} />
+      </section>
+
+      <IndicatorCharts row={selected} />
+      <Studies ticker={selected.ticker} initial={selected.overlay} />
+    </>
   );
 }
 

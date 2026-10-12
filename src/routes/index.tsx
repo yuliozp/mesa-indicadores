@@ -1,8 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { TickerDesk } from "@/components/ticker-desk";
+import { RangoScreen } from "@/components/rango-screen";
 
-export const Route = createFileRoute("/")({ component: Home });
-
-function Home() {
-  return <TickerDesk />;
-}
+export const Route = createFileRoute("/")({ component: RangoScreen });

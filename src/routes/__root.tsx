@@ -1,9 +1,10 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import { AuthProvider } from "@/lib/auth/provider";
 import { PreviewHostBridge } from "@/components/preview-host-bridge";
+import { AppNav } from "@/components/app-nav";
 import appCss from "../styles.css?url";
 
-const APP_NAME = "Mesa de indicadores";
+const APP_NAME = "Rango óptimo · Mesa de indicadores";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -14,7 +15,7 @@ export const Route = createRootRoute({
       {
         name: "description",
         content:
-          "Indicadores de un ticker y rango óptimo de calls y puts con el vencimiento más cercano.",
+          "Rango óptimo de precios para opciones y mesa de indicadores de cada acción.",
       },
       { name: "theme-color", content: "#0c1116" },
     ],
@@ -39,6 +40,7 @@ export const Route = createRootRoute({
       <body>
         <PreviewHostBridge />
         <AuthProvider>
+          <AppNav />
           <Outlet />
         </AuthProvider>
         <Scripts />
