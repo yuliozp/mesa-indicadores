@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ADS, ADS_PAUSED_UNTIL, type Ad, type GalleryAd, type PromoAd } from "@/lib/ads";
+import { ADS, ADS_ENABLED, ADS_PAUSED_UNTIL, type Ad, type GalleryAd, type PromoAd } from "@/lib/ads";
 
 type Scene = { id: string; stay: number };
 
@@ -32,7 +32,7 @@ export function AdOverlay() {
 
   // elegir al azar solo en el navegador (evita diferencias con el render del servidor)
   useEffect(() => {
-    if (Date.now() < ADS_PAUSED_UNTIL) return;
+    if (!ADS_ENABLED || Date.now() < ADS_PAUSED_UNTIL) return;
     const pool = ADS.filter((a) => a.logo && a.tagline);
     if (!pool.length) return;
     setAd(pool[Math.floor(Math.random() * pool.length)]);

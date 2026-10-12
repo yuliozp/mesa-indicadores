@@ -33,6 +33,12 @@ export type GalleryAd = {
 
 export type Ad = PromoAd | GalleryAd;
 
+/**
+ * Interruptor general de la publicidad inicial. Apagado por ahora: la página
+ * abre directo en la herramienta. Para volver a mostrar anuncios, cambiar a true.
+ */
+export const ADS_ENABLED = false;
+
 /** Mientras esta fecha no pase no se muestra publicidad. */
 export const ADS_PAUSED_UNTIL = new Date("2026-09-09T11:10:00Z").getTime();
 
