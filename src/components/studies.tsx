@@ -122,7 +122,8 @@ function applyRange(points: OverlayPoint[], range: RangeId, today: string): { po
     };
   }
   const first = visible[0].t.slice(0, 10);
-  if (first > start) {
+  // fines de semana y feriados no cuentan como falta de datos: solo avisa si faltan más de 5 días
+  if (first > shiftIso(start, 5, 0)) {
     return {
       points: visible,
       note: `Esta temporalidad no cubre todo el periodo. Datos desde ${prettyDay(first)}.`,
