@@ -12,7 +12,7 @@ import {
   YAxis,
 } from "recharts";
 import { Search } from "lucide-react";
-import { ChartLightbox, Studies } from "@/components/studies";
+import { ChartLightbox, Studies, TC, Watermark, type ChartIdentity } from "@/components/studies";
 import { analyzeTicker } from "@/lib/market/analyze.functions";
 import type { Analysis, SideRange } from "@/lib/market/types";
 import { rsiZone } from "@/lib/market/math";
@@ -330,7 +330,11 @@ export function DeskDetail({ row: selected }: { row: Analysis }) {
       </section>
 
       <IndicatorCharts row={selected} />
-      <Studies ticker={selected.ticker} initial={selected.overlay} />
+      <Studies
+        ticker={selected.ticker}
+        initial={selected.overlay}
+        identity={{ ticker: selected.ticker, name: selected.name, sector: selected.sector, industry: selected.industry }}
+      />
     </>
   );
 }
@@ -396,6 +400,7 @@ function IndicatorCharts({ row }: { row: Analysis }) {
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
   const data = row.chart.filter((p) => p.rsi != null);
+  const identity: ChartIdentity = { ticker: row.ticker, name: row.name, sector: row.sector, industry: row.industry };
   if (data.length < 5) return null;
   return (
     <>
@@ -413,75 +418,79 @@ function IndicatorCharts({ row }: { row: Analysis }) {
           }
         }}
       >
-        <DailyStack data={data} tall={false} />
+        <DailyStack data={data} tall={false} identity={identity} />
       </section>
       {open ? (
         <ChartLightbox title="Precio, MACD y RSI · diario" onClose={close}>
-          <DailyStack data={data} tall />
+          <DailyStack data={data} tall identity={identity} />
         </ChartLightbox>
       ) : null}
     </>
   );
 }
 
-function DailyStack({ data, tall }: { data: Analysis["chart"]; tall: boolean }) {
-  const priceH = tall ? "h-72" : "h-48";
-  const oscH = tall ? "h-48" : "h-36";
+const tcTip = {
+  contentStyle: { background: "rgba(0,0,0,0.9)", border: "1px solid #333", borderRadius: 6, color: "#e5e5e5" },
+  labelStyle: { color: TC.axis },
+};
+
+function DailyStack({ data, tall, identity }: { data: Analysis["chart"]; tall: boolean; identity: ChartIdentity }) {
+  const priceH = tall ? "h-80" : "h-52";
+  const oscH = tall ? "h-44" : "h-32";
+  const last = data[data.length - 1]?.close;
+  const axis = { fill: TC.axis, fontSize: 11 };
   return (
     <>
       <h3 className="px-2 text-sm text-fg">Precio, MACD y RSI · diario</h3>
-      <div className={`mt-2 overflow-hidden ${priceH}`}>
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-            <CartesianGrid stroke="var(--color-line)" vertical={false} />
-            <XAxis dataKey="date" tickFormatter={tickLabel} tick={{ fill: "var(--color-muted)", fontSize: 11 }} minTickGap={28} />
-            <YAxis domain={["auto", "auto"]} tick={{ fill: "var(--color-muted)", fontSize: 11 }} width={48} />
-            <Tooltip
-              contentStyle={{ background: "var(--color-inset)", border: "1px solid var(--color-line)", borderRadius: 8 }}
-              labelStyle={{ color: "var(--color-muted)" }}
-              formatter={(value: number) => [money(value), "Cierre"]}
-            />
-            <Line type="monotone" dataKey="close" stroke="var(--color-fg)" dot={false} strokeWidth={2} isAnimationActive={false} />
-          </ComposedChart>
-        </ResponsiveContainer>
+      <div className="mt-2 overflow-hidden rounded-md border border-[#1c1c1c]" style={{ background: TC.bg }}>
+        <div className={`relative ${priceH}`}>
+          <Watermark identity={identity} />
+          <div className="relative z-[1] h-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={data} margin={{ top: 10, right: 0, left: 6, bottom: 0 }}>
+                <CartesianGrid stroke={TC.grid} />
+                <XAxis dataKey="date" hide />
+                <YAxis orientation="right" domain={["auto", "auto"]} tick={axis} axisLine={{ stroke: TC.grid }} tickLine={false} width={58} />
+                <Tooltip {...tcTip} formatter={(value: number) => [money(value), "Cierre"]} />
+                {last != null ? <ReferenceLine y={last} stroke={TC.last} strokeDasharray="8 6" /> : null}
+                <Line type="monotone" dataKey="close" stroke="#e8e8e8" dot={false} strokeWidth={1.5} isAnimationActive={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div className={`border-t border-[#3a3a3a] ${oscH}`}>
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={data} margin={{ top: 8, right: 0, left: 6, bottom: 0 }}>
+              <CartesianGrid stroke={TC.grid} />
+              <XAxis dataKey="date" hide />
+              <YAxis orientation="right" tick={axis} axisLine={{ stroke: TC.grid }} tickLine={false} width={58} />
+              <ReferenceLine y={0} stroke={TC.last} />
+              <Tooltip {...tcTip} formatter={(value: number, name: string) => [Number(value).toFixed(2), name]} />
+              <Bar dataKey="hist" isAnimationActive={false}>
+                {data.map((point) => (
+                  <Cell key={point.date} fill={(point.hist ?? 0) >= 0 ? TC.up : TC.down} fillOpacity={0.8} />
+                ))}
+              </Bar>
+              <Line type="monotone" dataKey="macd" name="MACD" stroke={TC.band} dot={false} strokeWidth={1.5} isAnimationActive={false} />
+              <Line type="monotone" dataKey="signal" name="Señal" stroke="#e8c547" dot={false} strokeWidth={1.25} isAnimationActive={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+        <div className={`border-t border-[#3a3a3a] ${oscH}`}>
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={data} margin={{ top: 8, right: 0, left: 6, bottom: 0 }}>
+              <CartesianGrid stroke={TC.grid} />
+              <XAxis dataKey="date" tickFormatter={tickLabel} tick={axis} axisLine={{ stroke: TC.grid }} tickLine={false} minTickGap={36} />
+              <YAxis orientation="right" domain={[0, 100]} ticks={[30, 50, 70]} tick={axis} axisLine={{ stroke: TC.grid }} tickLine={false} width={58} />
+              <ReferenceLine y={70} stroke={TC.down} strokeOpacity={0.7} strokeDasharray="6 5" />
+              <ReferenceLine y={30} stroke={TC.up} strokeOpacity={0.7} strokeDasharray="6 5" />
+              <Tooltip {...tcTip} formatter={(value: number) => [Number(value).toFixed(1), "RSI"]} />
+              <Line type="monotone" dataKey="rsi" stroke={TC.band} dot={false} strokeWidth={1.5} isAnimationActive={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
       </div>
-      <div className={`overflow-hidden ${oscH}`}>
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-            <CartesianGrid stroke="var(--color-line)" vertical={false} />
-            <XAxis dataKey="date" hide />
-            <YAxis tick={{ fill: "var(--color-muted)", fontSize: 11 }} width={48} />
-            <ReferenceLine y={0} stroke="var(--color-line)" />
-            <Tooltip
-              contentStyle={{ background: "var(--color-inset)", border: "1px solid var(--color-line)", borderRadius: 8 }}
-              formatter={(value: number, name: string) => [Number(value).toFixed(2), name]}
-            />
-            <Bar dataKey="hist" isAnimationActive={false}>
-              {data.map((point) => (
-                <Cell key={point.date} fill={(point.hist ?? 0) >= 0 ? "var(--color-up)" : "var(--color-down)"} />
-              ))}
-            </Bar>
-            <Line type="monotone" dataKey="macd" name="MACD" stroke="var(--color-call)" dot={false} strokeWidth={2} isAnimationActive={false} />
-            <Line type="monotone" dataKey="signal" name="Señal" stroke="var(--color-put)" dot={false} strokeWidth={1.5} isAnimationActive={false} />
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
-      <div className={`overflow-hidden ${oscH}`}>
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-            <CartesianGrid stroke="var(--color-line)" vertical={false} />
-            <XAxis dataKey="date" tickFormatter={tickLabel} tick={{ fill: "var(--color-muted)", fontSize: 11 }} minTickGap={28} />
-            <YAxis domain={[0, 100]} ticks={[30, 50, 70]} tick={{ fill: "var(--color-muted)", fontSize: 11 }} width={48} />
-            <ReferenceLine y={70} stroke="var(--color-down)" strokeDasharray="3 3" />
-            <ReferenceLine y={30} stroke="var(--color-up)" strokeDasharray="3 3" />
-            <Tooltip
-              contentStyle={{ background: "var(--color-inset)", border: "1px solid var(--color-line)", borderRadius: 8 }}
-              formatter={(value: number) => [Number(value).toFixed(1), "RSI"]}
-            />
-            <Line type="monotone" dataKey="rsi" stroke="var(--color-call)" dot={false} strokeWidth={2} isAnimationActive={false} />
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
+      <p className="mt-2 px-2 text-xs text-muted">MACD turquesa y señal amarilla; RSI con niveles de 30 y 70.</p>
     </>
   );
 }

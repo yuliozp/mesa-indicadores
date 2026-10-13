@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import {
+  Area,
   Bar,
   CartesianGrid,
   ComposedChart,
@@ -30,6 +31,21 @@ const RANGES: Array<{ id: RangeId; label: string }> = [
   { id: "1y", label: "1 año" },
   { id: "ytd", label: "Este año" },
 ];
+
+/** Paleta y reglas visuales al estilo TC2000: fondo negro, velas verde/rojo puras, banda gris con borde turquesa. */
+export const TC = {
+  bg: "#000000",
+  grid: "#2b2b2b",
+  axis: "#a3a3a3",
+  up: "#16f02a",
+  down: "#ff2b2b",
+  band: "#5fc4c4",
+  bandFill: "#8a8a8a",
+  last: "#7d7d7d",
+  watermark: "rgba(170,170,170,0.22)",
+} as const;
+
+export type ChartIdentity = { ticker: string; name?: string | null; sector?: string | null; industry?: string | null };
 
 const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
@@ -136,7 +152,16 @@ function priceDomain(points: OverlayPoint[], mode: "ma" | "bb"): [number, number
   return [min - pad, max + pad];
 }
 
-export function Studies({ ticker, initial }: { ticker: string; initial: OverlaySeries }) {
+export function Studies({
+  ticker,
+  initial,
+  identity,
+}: {
+  ticker: string;
+  initial: OverlaySeries;
+  identity?: ChartIdentity;
+}) {
+  const id: ChartIdentity = identity ?? { ticker };
   const [interval, setInterval] = useState<IntervalId>("1d");
   const [range, setRange] = useState<RangeId>("3mo");
   const [series, setSeries] = useState<OverlaySeries>(initial);
@@ -194,12 +219,12 @@ export function Studies({ ticker, initial }: { ticker: string; initial: OverlayS
                 ["200", "var(--color-ma200)"],
               ]}
             />
-            <p className="mt-1 text-xs text-muted">Vela verde si cierra al alza, roja si cierra a la baja.</p>
+            <p className="mt-1 text-xs text-muted">Vela verde si cierra al alza, roja si cierra a la baja. Línea punteada: último precio.</p>
           </div>
           <IntervalPicker interval={interval} onChange={setInterval} />
           <RangePicker range={range} onChange={setRange} />
         </div>
-        <ZoomChart label="medias móviles" pending={pending} height="h-64" badge={badge} onZoom={() => setZoom("ma")}>
+        <ZoomChart label="medias móviles" pending={pending} height="h-64" badge={badge} identity={id} onZoom={() => setZoom("ma")}>
           <PriceChart points={visible} mode="ma" />
         </ZoomChart>
       </article>
@@ -208,12 +233,12 @@ export function Studies({ ticker, initial }: { ticker: string; initial: OverlayS
         <div className="flex flex-col gap-3 px-2">
           <div>
             <h3 className="text-sm text-fg">Bandas de Bollinger</h3>
-            <p className="mt-1 text-xs text-muted">20 periodos, ±2 desviaciones. Misma vela y mismo periodo que las medias.</p>
+            <p className="mt-1 text-xs text-muted">20 periodos, ±2 desviaciones: la banda gris es el canal y la línea turquesa del medio es la media de 20.</p>
           </div>
           <IntervalPicker interval={interval} onChange={setInterval} />
           <RangePicker range={range} onChange={setRange} />
         </div>
-        <ZoomChart label="bandas de Bollinger" pending={pending} height="h-56" badge={badge} onZoom={() => setZoom("bb")}>
+        <ZoomChart label="bandas de Bollinger" pending={pending} height="h-56" badge={badge} identity={id} onZoom={() => setZoom("bb")}>
           <PriceChart points={visible} mode="bb" />
         </ZoomChart>
       </article>
@@ -228,7 +253,7 @@ export function Studies({ ticker, initial }: { ticker: string; initial: OverlayS
           </div>
           <RangePicker range={range} onChange={setRange} />
         </div>
-        <ZoomChart label="Worden Stochastic" pending={pending} height="h-52" badge={badge} onZoom={() => setZoom("worden")}>
+        <ZoomChart label="Worden Stochastic" pending={pending} height="h-52" badge={badge} identity={id} onZoom={() => setZoom("worden")}>
           <WordenChart points={visible} />
         </ZoomChart>
       </article>
@@ -243,7 +268,7 @@ export function Studies({ ticker, initial }: { ticker: string; initial: OverlayS
             <RangePicker range={range} onChange={setRange} />
             {windowed.note ? <p className="text-xs text-put">{windowed.note}</p> : null}
           </div>
-          <ChartBox pending={pending} height="h-[68vh]" badge={badge}>
+          <ChartBox pending={pending} height="h-[68vh]" badge={badge} identity={id}>
             {zoom === "worden" ? <WordenChart points={visible} /> : <PriceChart points={visible} mode={zoom} />}
           </ChartBox>
         </ChartLightbox>
@@ -266,19 +291,40 @@ function PriceChart({
   const domain = priceDomain(points, mode);
   const dots = points.length < 2;
   if (!width || !height) return null;
+  const last = points[points.length - 1]?.close;
   return (
-    <ComposedChart width={width} height={height} data={points} margin={{ top: 18, right: 8, left: 0, bottom: 0 }}>
-      <CartesianGrid stroke="var(--color-line)" vertical={false} />
-      <XAxis dataKey="t" tickFormatter={axisTick} tick={{ fill: "var(--color-muted)", fontSize: 11 }} minTickGap={28} />
+    <ComposedChart width={width} height={height} data={points} margin={{ top: 22, right: 0, left: 6, bottom: 0 }}>
+      <CartesianGrid stroke={TC.grid} strokeWidth={1} />
+      <XAxis dataKey="t" tickFormatter={axisTick} tick={{ fill: TC.axis, fontSize: 11 }} axisLine={{ stroke: TC.grid }} tickLine={false} minTickGap={36} />
       <YAxis
         yAxisId="p"
+        orientation="right"
         domain={domain}
         allowDataOverflow
         tickFormatter={(v: number) => price(Number(v))}
-        tick={{ fill: "var(--color-muted)", fontSize: 11 }}
-        width={58}
+        tick={{ fill: TC.axis, fontSize: 11 }}
+        axisLine={{ stroke: TC.grid }}
+        tickLine={false}
+        width={62}
       />
-      <Tooltip content={<OhlcTip mode={mode} />} />
+      <Tooltip content={<OhlcTip mode={mode} />} cursor={{ stroke: "#555", strokeDasharray: "3 3" }} />
+      {mode === "bb" ? (
+        <Area
+          yAxisId="p"
+          type="monotone"
+          dataKey={(p: OverlayPoint) => (p.bbLower == null || p.bbUpper == null ? null : [p.bbLower, p.bbUpper])}
+          name="Banda"
+          stroke={TC.band}
+          strokeWidth={1}
+          fill={TC.bandFill}
+          fillOpacity={0.38}
+          connectNulls
+          isAnimationActive={false}
+          activeDot={false}
+        />
+      ) : null}
+      {mode === "bb" ? <Line yAxisId="p" type="monotone" dataKey="bbMid" name="Media 20" stroke={TC.band} dot={false} strokeWidth={1} connectNulls isAnimationActive={false} activeDot={false} /> : null}
+      {last != null ? <ReferenceLine yAxisId="p" y={last} stroke={TC.last} strokeDasharray="8 6" strokeWidth={1} /> : null}
       <Bar
         yAxisId="p"
         dataKey="close"
@@ -286,13 +332,10 @@ function PriceChart({
         legendType="none"
         shape={(raw: unknown) => <CandleMark {...(raw as MarkProps)} domain={domain} />}
       />
-      {mode === "ma" ? <Line yAxisId="p" type="monotone" dataKey="ma20" name="MA 20" stroke="var(--color-ma20)" dot={dots} strokeWidth={1.5} connectNulls isAnimationActive={false} /> : null}
-      {mode === "ma" ? <Line yAxisId="p" type="monotone" dataKey="ma40" name="MA 40" stroke="var(--color-ma40)" dot={dots} strokeWidth={1.5} connectNulls isAnimationActive={false} /> : null}
-      {mode === "ma" ? <Line yAxisId="p" type="monotone" dataKey="ma100" name="MA 100" stroke="var(--color-ma100)" dot={dots} strokeWidth={1.5} connectNulls isAnimationActive={false} /> : null}
-      {mode === "ma" ? <Line yAxisId="p" type="monotone" dataKey="ma200" name="MA 200" stroke="var(--color-ma200)" dot={dots} strokeWidth={1.5} connectNulls isAnimationActive={false} /> : null}
-      {mode === "bb" ? <Line yAxisId="p" type="monotone" dataKey="bbUpper" name="Superior" stroke="var(--color-call)" dot={false} strokeWidth={1.25} connectNulls isAnimationActive={false} /> : null}
-      {mode === "bb" ? <Line yAxisId="p" type="monotone" dataKey="bbMid" name="Media 20" stroke="var(--color-ma20)" dot={false} strokeDasharray="4 3" connectNulls isAnimationActive={false} /> : null}
-      {mode === "bb" ? <Line yAxisId="p" type="monotone" dataKey="bbLower" name="Inferior" stroke="var(--color-call)" dot={false} strokeWidth={1.25} connectNulls isAnimationActive={false} /> : null}
+      {mode === "ma" ? <Line yAxisId="p" type="monotone" dataKey="ma20" name="MA 20" stroke="var(--color-ma20)" dot={dots} strokeWidth={1.25} connectNulls isAnimationActive={false} /> : null}
+      {mode === "ma" ? <Line yAxisId="p" type="monotone" dataKey="ma40" name="MA 40" stroke="var(--color-ma40)" dot={dots} strokeWidth={1.25} connectNulls isAnimationActive={false} /> : null}
+      {mode === "ma" ? <Line yAxisId="p" type="monotone" dataKey="ma100" name="MA 100" stroke="var(--color-ma100)" dot={dots} strokeWidth={1.25} connectNulls isAnimationActive={false} /> : null}
+      {mode === "ma" ? <Line yAxisId="p" type="monotone" dataKey="ma200" name="MA 200" stroke="var(--color-ma200)" dot={dots} strokeWidth={1.25} connectNulls isAnimationActive={false} /> : null}
     </ComposedChart>
   );
 }
@@ -301,10 +344,10 @@ function WordenChart({ points, width, height }: { points: OverlayPoint[]; width?
   const maxVol = points.reduce((max, point) => Math.max(max, point.volume), 1);
   if (!width || !height) return null;
   return (
-    <ComposedChart width={width} height={height} data={points} margin={{ top: 18, right: 8, left: 0, bottom: 0 }}>
-      <CartesianGrid stroke="var(--color-line)" vertical={false} />
-      <XAxis dataKey="t" tickFormatter={axisTick} tick={{ fill: "var(--color-muted)", fontSize: 11 }} minTickGap={28} />
-      <YAxis yAxisId="w" domain={[0, 100]} ticks={[20, 50, 80]} tick={{ fill: "var(--color-muted)", fontSize: 11 }} width={36} />
+    <ComposedChart width={width} height={height} data={points} margin={{ top: 22, right: 0, left: 6, bottom: 0 }}>
+      <CartesianGrid stroke={TC.grid} strokeWidth={1} />
+      <XAxis dataKey="t" tickFormatter={axisTick} tick={{ fill: TC.axis, fontSize: 11 }} axisLine={{ stroke: TC.grid }} tickLine={false} minTickGap={36} />
+      <YAxis yAxisId="w" orientation="right" domain={[0, 100]} ticks={[20, 50, 80]} tick={{ fill: TC.axis, fontSize: 11 }} axisLine={{ stroke: TC.grid }} tickLine={false} width={40} />
       <YAxis yAxisId="v" hide domain={[0, 1]} />
       <Tooltip content={<OhlcTip mode="worden" />} />
       <Bar
@@ -314,9 +357,10 @@ function WordenChart({ points, width, height }: { points: OverlayPoint[]; width?
         legendType="none"
         shape={(raw: unknown) => <VolumeMark {...(raw as MarkProps)} maxVol={maxVol} />}
       />
-      <ReferenceLine yAxisId="w" y={80} stroke="var(--color-down)" strokeDasharray="3 3" />
-      <ReferenceLine yAxisId="w" y={20} stroke="var(--color-up)" strokeDasharray="3 3" />
-      <Line yAxisId="w" type="monotone" dataKey="worden" name="Worden" stroke="var(--color-ma200)" dot={false} strokeWidth={2} connectNulls isAnimationActive={false} />
+      <ReferenceLine yAxisId="w" y={80} stroke={TC.down} strokeOpacity={0.7} strokeDasharray="6 5" />
+      <ReferenceLine yAxisId="w" y={50} stroke={TC.last} strokeDasharray="2 4" />
+      <ReferenceLine yAxisId="w" y={20} stroke={TC.up} strokeOpacity={0.7} strokeDasharray="6 5" />
+      <Line yAxisId="w" type="monotone" dataKey="worden" name="Worden" stroke={TC.band} dot={false} strokeWidth={1.5} connectNulls isAnimationActive={false} />
     </ComposedChart>
   );
 }
@@ -326,10 +370,10 @@ function CandleMark({ x = 0, width = 0, payload, background, domain }: MarkProps
   const top = background.y ?? 0;
   const span = domain[1] - domain[0] || 1;
   const yOf = (value: number) => top + ((domain[1] - value) / span) * (background.height as number);
-  const bodyW = Math.max(1.2, Math.min(14, width * 0.72));
+  const bodyW = Math.max(1.5, Math.min(12, width * 0.62));
   const cx = x + width / 2;
   const up = payload.close >= payload.open;
-  const color = up ? "var(--color-up)" : "var(--color-down)";
+  const color = up ? TC.up : TC.down;
   const yOpen = yOf(payload.open);
   const yClose = yOf(payload.close);
   return (
@@ -359,8 +403,8 @@ function VolumeMark({ x = 0, width = 0, payload, background, maxVol }: MarkProps
       y={y}
       width={bodyW}
       height={h}
-      fill={up ? "var(--color-up)" : "var(--color-down)"}
-      opacity={0.55}
+      fill={up ? TC.up : TC.down}
+      opacity={0.45}
     />
   );
 }
@@ -378,13 +422,13 @@ function OhlcTip({
   if (!active || !row) return null;
   const up = row.close >= row.open;
   return (
-    <div className="rounded-lg border border-line bg-inset px-2.5 py-2 text-xs text-fg">
+    <div className="rounded-md border border-[#333] bg-black/90 px-2.5 py-2 text-xs text-[#e5e5e5]">
       <p className="mb-1 font-mono text-muted">{row.t}</p>
       {mode === "worden" ? (
         <p>Worden {row.worden == null ? "—" : row.worden.toFixed(1)}</p>
       ) : (
         <>
-          <p className={up ? "text-up" : "text-down"}>
+          <p style={{ color: up ? TC.up : TC.down }}>
             A {price(row.open)} · C {price(row.close)}
           </p>
           <p>
@@ -479,6 +523,7 @@ function ZoomChart({
   height,
   badge,
   label,
+  identity,
   onZoom,
 }: {
   children: ReactElement;
@@ -486,6 +531,7 @@ function ZoomChart({
   height: string;
   badge: string;
   label: string;
+  identity?: ChartIdentity;
   onZoom: () => void;
 }) {
   return (
@@ -502,7 +548,7 @@ function ZoomChart({
       }}
       className="mt-2"
     >
-      <ChartBox pending={pending} height={height} badge={badge}>
+      <ChartBox pending={pending} height={height} badge={badge} identity={identity}>
         {children}
       </ChartBox>
     </div>
@@ -514,25 +560,52 @@ function ChartBox({
   pending,
   height,
   badge,
+  identity,
 }: {
   children: ReactElement;
   pending: boolean;
   height: string;
   badge: string;
+  identity?: ChartIdentity;
 }) {
   return (
-    <div className={`relative overflow-hidden ${height} ${pending ? "opacity-50" : ""}`}>
+    <div
+      className={`relative overflow-hidden rounded-md border border-[#1c1c1c] ${height} ${pending ? "opacity-50" : ""}`}
+      style={{ background: TC.bg }}
+    >
+      {identity ? <Watermark identity={identity} /> : null}
       <TimeBadge label={badge} />
-      <ResponsiveContainer width="100%" height="100%">
-        {children}
-      </ResponsiveContainer>
+      <div className="relative z-[1] h-full w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          {children}
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+/** Marca de agua centrada, como TC2000: ticker grande y debajo empresa, sector e industria. */
+export function Watermark({ identity }: { identity: ChartIdentity }) {
+  const lines = [identity.name, identity.sector, identity.industry].filter(Boolean) as string[];
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 z-0 flex flex-col items-center justify-center pr-14 text-center select-none"
+      style={{ color: TC.watermark }}
+    >
+      <span className="text-[clamp(2.5rem,9vw,5.5rem)] leading-none font-medium tracking-tight">{identity.ticker}</span>
+      {lines.map((line, i) => (
+        <span key={line} className={i === 0 ? "mt-1 text-[clamp(1.1rem,3.6vw,2.25rem)] leading-tight" : "text-[clamp(0.85rem,2.4vw,1.35rem)] leading-snug"}>
+          {line}
+        </span>
+      ))}
     </div>
   );
 }
 
 function TimeBadge({ label }: { label: string }) {
   return (
-    <span className="pointer-events-none absolute top-1 right-2 z-10 max-w-[70%] truncate rounded-md border border-line bg-inset px-2 py-1 font-mono text-xs text-call">
+    <span className="pointer-events-none absolute top-1 left-2 z-10 max-w-[70%] truncate rounded px-1.5 py-0.5 font-mono text-[11px] text-[#a3a3a3]">
       {label}
     </span>
   );
