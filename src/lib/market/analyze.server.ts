@@ -357,6 +357,7 @@ export async function analyzeTickerData(rawTicker: string): Promise<Analysis> {
 
   const snap = await finvizSnapshot(ticker);
   const calendar = await loadCalendar(ticker, snap);
+  const ath = await allTimeHigh(ticker, daily);
   const chain = await loadChain(ticker);
   const picked = pickExpiration(chain, expirationCutoff());
   let call: SideRange | null = null;
@@ -405,9 +406,28 @@ export async function analyzeTickerData(rawTicker: string): Promise<Analysis> {
     put,
     chart,
     overlay: overlayFromBars(ticker, "1d", barsWithLiveClose(ohlcBars(daily, false), today, price)),
+    allTimeHigh: ath?.value ?? null,
+    allTimeHighDate: ath?.date ?? null,
     calendar,
     note,
   };
+}
+
+/** Máximo histórico: velas mensuales de toda la historia (y las diarias para afinar la fecha reciente). */
+async function allTimeHigh(ticker: string, daily: ChartResult): Promise<{ value: number; date: string } | null> {
+  let best: { value: number; date: string } | null = null;
+  const consider = (chart: ChartResult | null) => {
+    if (!chart) return;
+    chart.timestamps.forEach((ts, i) => {
+      const h = chart.quote[i]?.high;
+      if (h != null && (!best || h > best.value)) best = { value: h, date: etDate(ts) };
+    });
+  };
+  consider(await yahooChart(ticker, "1mo", "max"));
+  consider(daily);
+  const live = num(daily.meta.regularMarketDayHigh);
+  if (live != null && (!best || live > (best as { value: number }).value)) best = { value: live, date: etDate(Math.floor(Date.now() / 1000)) };
+  return best;
 }
 
 const INTERVALS: Record<IntervalId, { yahoo: string; range: string; label: string }> = {
@@ -449,8 +469,25 @@ function ohlcBars(chart: ChartResult, withTime: boolean): Bar[] {
   return out;
 }
 
+/** ¿Ya abrió hoy la sesión regular (día hábil, 9:30 ET o después)? */
+function sessionStartedToday(now = new Date()): boolean {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    weekday: "short",
+  }).formatToParts(now);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const wd = get("weekday");
+  if (wd === "Sat" || wd === "Sun") return false;
+  return Number(get("hour")) * 60 + Number(get("minute")) >= 570;
+}
+
 function barsWithLiveClose(bars: Bar[], today: string, price: number): Bar[] {
   if (!bars.length || bars[bars.length - 1].t.slice(0, 10) < today) {
+    // antes de la apertura o en fin de semana no se inventa una vela de hoy
+    if (bars.length && !sessionStartedToday()) return bars;
     return [...bars, { t: today, open: price, high: price, low: price, close: price, volume: 0 }];
   }
   if (bars[bars.length - 1].t.slice(0, 10) === today) {
@@ -505,8 +542,41 @@ export function isInterval(value: string): value is IntervalId {
   return value === "1m" || value === "5m" || value === "15m" || value === "1h" || value === "1d";
 }
 
+/**
+ * Velas de 1 hora como en la mesa del usuario: la primera va de 9:30 a 10:00 y
+ * de ahí en adelante cada vela cubre una hora completa (10-11, 11-12 … 15-16).
+ */
+function hourlyFromSession(bars: Bar[]): Bar[] {
+  const out: Bar[] = [];
+  let key = "";
+  for (const b of bars) {
+    const day = b.t.slice(0, 10);
+    const hm = b.t.slice(11, 16);
+    if (hm < "09:30" || hm >= "16:00") continue;
+    const k = `${day} ${hm < "10:00" ? "09:30" : `${hm.slice(0, 2)}:00`}`;
+    if (k !== key) {
+      out.push({ t: k, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume });
+      key = k;
+    } else {
+      const cur = out[out.length - 1];
+      cur.high = Math.max(cur.high, b.high);
+      cur.low = Math.min(cur.low, b.low);
+      cur.close = b.close;
+      cur.volume += b.volume;
+    }
+  }
+  return out;
+}
+
 export async function loadOverlaySeries(ticker: string, interval: IntervalId): Promise<OverlaySeries> {
   const spec = INTERVALS[interval];
+  if (interval === "1h") {
+    const fine = await yahooChart(ticker, "30m", "60d");
+    if (fine) {
+      const hourly = hourlyFromSession(ohlcBars(fine, true));
+      if (hourly.length >= 20) return overlayFromBars(ticker, interval, hourly);
+    }
+  }
   let chart = await yahooChart(ticker, spec.yahoo, spec.range);
   if (!chart && interval === "1h") chart = await yahooChart(ticker, "60m", "1y");
   if (!chart) throw new Error(`No hay velas de ${spec.label} para ${ticker}.`);

@@ -4,6 +4,7 @@ import {
   Bar,
   CartesianGrid,
   ComposedChart,
+  Customized,
   Line,
   ReferenceLine,
   ResponsiveContainer,
@@ -42,6 +43,13 @@ export const TC = {
   band: "#5fc4c4",
   bandFill: "#8a8a8a",
   last: "#7d7d7d",
+  close: "#ffd400",
+  open: "#3b82f6",
+  ath: "#2f6bff",
+  ma20: "#e6c84a",
+  ma40: "#e15b64",
+  ma100: "#3dbe6a",
+  ma200: "#b07cff",
   watermark: "rgba(170,170,170,0.22)",
 } as const;
 
@@ -152,14 +160,79 @@ function priceDomain(points: OverlayPoint[], mode: "ma" | "bb"): [number, number
   return [min - pad, max + pad];
 }
 
+export type ChartLevels = {
+  /** Cierre del último día de mercado completo. */
+  lastClose: number | null;
+  lastCloseDay: string | null;
+  /** Apertura de la última sesión. */
+  lastOpen: number | null;
+  lastOpenDay: string | null;
+  ath: number | null;
+  athDate: string | null;
+};
+
+function etNowMinutes(): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  return get("hour") * 60 + get("minute");
+}
+
+/** Cierre del último día completo y apertura de la última sesión, a partir de las velas diarias. */
+export function sessionLevels(daily: OverlayPoint[], ath: number | null, athDate: string | null): ChartLevels {
+  const last = daily[daily.length - 1];
+  if (!last) return { lastClose: null, lastCloseDay: null, lastOpen: null, lastOpenDay: null, ath, athDate };
+  const today = etToday();
+  const inSession = last.t.slice(0, 10) === today && etNowMinutes() < 16 * 60;
+  const closeBar = inSession ? daily[daily.length - 2] : last;
+  return {
+    lastClose: closeBar?.close ?? null,
+    lastCloseDay: closeBar?.t.slice(0, 10) ?? null,
+    lastOpen: last.open,
+    lastOpenDay: last.t.slice(0, 10),
+    ath,
+    athDate,
+  };
+}
+
+type ChartKey = "ma" | "bb" | "worden";
+const MIN_BARS = 12;
+
+/** Rueda del mouse: hacia arriba acerca (menos velas), hacia abajo aleja (más velas), anclado en la última vela. */
+export function useWheelZoom(total: number, count: number, setCount: (n: number) => void) {
+  const [node, setNode] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!node) return;
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey) return;
+      event.preventDefault();
+      const factor = event.deltaY < 0 ? 1 / 1.18 : 1.18;
+      const next = Math.round(count * factor);
+      const clamped = Math.max(Math.min(MIN_BARS, total), Math.min(total, next === count ? count + (event.deltaY < 0 ? -1 : 1) : next));
+      if (clamped !== count) setCount(clamped);
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
+  }, [node, total, count, setCount]);
+  return setNode;
+}
+
 export function Studies({
   ticker,
   initial,
   identity,
+  ath = null,
+  athDate = null,
 }: {
   ticker: string;
   initial: OverlaySeries;
   identity?: ChartIdentity;
+  ath?: number | null;
+  athDate?: string | null;
 }) {
   const id: ChartIdentity = identity ?? { ticker };
   const [interval, setInterval] = useState<IntervalId>("1d");
@@ -167,9 +240,10 @@ export function Studies({
   const [series, setSeries] = useState<OverlaySeries>(initial);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [zoom, setZoom] = useState<null | "ma" | "bb" | "worden">(null);
+  const [zoom, setZoom] = useState<null | ChartKey>(null);
   const closeZoom = useCallback(() => setZoom(null), []);
   const today = useMemo(() => etToday(), []);
+  const levels = useMemo(() => sessionLevels(initial.points, ath, athDate), [initial.points, ath, athDate]);
 
   useEffect(() => {
     if (interval === "1d") {
@@ -197,13 +271,27 @@ export function Studies({
   }, [ticker, interval, initial]);
 
   const windowed = useMemo(() => applyRange(series.points, range, today), [series.points, range, today]);
-  const visible = windowed.points;
+  const total = series.points.length;
+  const base = Math.max(1, windowed.points.length);
+  // cada gráfico tiene su propio zoom; el periodo elegido los vuelve a alinear
+  const [counts, setCounts] = useState<Record<ChartKey, number>>({ ma: base, bb: base, worden: base });
+  useEffect(() => setCounts({ ma: base, bb: base, worden: base }), [base, series]);
+  const setter = useCallback((key: ChartKey) => (n: number) => setCounts((c) => ({ ...c, [key]: n })), []);
+  const view = (key: ChartKey) => {
+    const n = Math.min(total, Math.max(1, counts[key]));
+    return n === base ? windowed.points : series.points.slice(-n);
+  };
   const rangeLabel = RANGES.find((item) => item.id === range)?.label ?? "";
-  const badge = `${series.label} · ${rangeLabel}`;
+  const badgeFor = (key: ChartKey) =>
+    counts[key] === base ? `${series.label} · ${rangeLabel}` : `${series.label} · ${view(key).length} velas`;
 
   return (
     <section className="mt-4 space-y-3">
-      <p className="text-xs text-muted">Toca un gráfico para abrirlo en grande. El periodo elegido se aplica a los tres.</p>
+      <p className="text-xs text-muted">
+        Rueda del mouse sobre un gráfico: hacia arriba acerca, hacia abajo aleja (cada gráfico por separado). Toca para
+        abrirlo en grande. El periodo vuelve a alinear los tres.
+      </p>
+      <LevelsLegend levels={levels} />
       {windowed.note ? <p className="text-xs text-put">{windowed.note}</p> : null}
       {error ? <p className="text-xs text-down">{error}</p> : null}
 
@@ -219,13 +307,13 @@ export function Studies({
                 ["200", "var(--color-ma200)"],
               ]}
             />
-            <p className="mt-1 text-xs text-muted">Vela verde si cierra al alza, roja si cierra a la baja. Línea punteada: último precio.</p>
+            <p className="mt-1 text-xs text-muted">Vela verde si cierra al alza, roja si cierra a la baja.</p>
           </div>
           <IntervalPicker interval={interval} onChange={setInterval} />
           <RangePicker range={range} onChange={setRange} />
         </div>
-        <ZoomChart label="medias móviles" pending={pending} height="h-64" badge={badge} identity={id} onZoom={() => setZoom("ma")}>
-          <PriceChart points={visible} mode="ma" />
+        <ZoomChart label="medias móviles" pending={pending} height="h-72" badge={badgeFor("ma")} identity={id} onZoom={() => setZoom("ma")} total={total} count={counts.ma} setCount={setter("ma")}>
+          <PriceChart points={view("ma")} mode="ma" levels={levels} />
         </ZoomChart>
       </article>
 
@@ -238,8 +326,8 @@ export function Studies({
           <IntervalPicker interval={interval} onChange={setInterval} />
           <RangePicker range={range} onChange={setRange} />
         </div>
-        <ZoomChart label="bandas de Bollinger" pending={pending} height="h-56" badge={badge} identity={id} onZoom={() => setZoom("bb")}>
-          <PriceChart points={visible} mode="bb" />
+        <ZoomChart label="bandas de Bollinger" pending={pending} height="h-64" badge={badgeFor("bb")} identity={id} onZoom={() => setZoom("bb")} total={total} count={counts.bb} setCount={setter("bb")}>
+          <PriceChart points={view("bb")} mode="bb" levels={levels} />
         </ZoomChart>
       </article>
 
@@ -253,8 +341,8 @@ export function Studies({
           </div>
           <RangePicker range={range} onChange={setRange} />
         </div>
-        <ZoomChart label="Worden Stochastic" pending={pending} height="h-52" badge={badge} identity={id} onZoom={() => setZoom("worden")}>
-          <WordenChart points={visible} />
+        <ZoomChart label="Worden Stochastic" pending={pending} height="h-52" badge={badgeFor("worden")} identity={id} onZoom={() => setZoom("worden")} total={total} count={counts.worden} setCount={setter("worden")}>
+          <WordenChart points={view("worden")} />
         </ZoomChart>
       </article>
 
@@ -268,30 +356,124 @@ export function Studies({
             <RangePicker range={range} onChange={setRange} />
             {windowed.note ? <p className="text-xs text-put">{windowed.note}</p> : null}
           </div>
-          <ChartBox pending={pending} height="h-[68vh]" badge={badge} identity={id}>
-            {zoom === "worden" ? <WordenChart points={visible} /> : <PriceChart points={visible} mode={zoom} />}
-          </ChartBox>
+          <WheelBox total={total} count={counts[zoom]} setCount={setter(zoom)}>
+            <ChartBox pending={pending} height="h-[68vh]" badge={badgeFor(zoom)} identity={id}>
+              {zoom === "worden" ? <WordenChart points={view(zoom)} /> : <PriceChart points={view(zoom)} mode={zoom} levels={levels} />}
+            </ChartBox>
+          </WheelBox>
         </ChartLightbox>
       ) : null}
     </section>
   );
 }
 
+export function LevelsLegend({ levels }: { levels: ChartLevels }) {
+  const items: Array<[string, string, boolean, number | null, string | null]> = [
+    ["Cierre último día", TC.close, true, levels.lastClose, levels.lastCloseDay],
+    ["Apertura última sesión", TC.open, true, levels.lastOpen, levels.lastOpenDay],
+    ["Máximo histórico", TC.ath, false, levels.ath, levels.athDate],
+  ];
+  return (
+    <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+      {items.map(([label, color, dashed, value, day]) => (
+        <span key={label} className="inline-flex items-center gap-1.5">
+          <span className="inline-block w-5 border-t-2" style={{ borderColor: color, borderStyle: dashed ? "dashed" : "solid" }} />
+          {label} <span className="font-mono text-fg">{value == null ? "—" : price(value)}</span>
+          {day ? <span className="text-muted">({prettyDay(day)})</span> : null}
+        </span>
+      ))}
+    </p>
+  );
+}
+
+export type Tag = { key: string; value: number; color: string; text: string };
+
+/**
+ * Banderitas de valor pegadas a la escala derecha, como en TC2000. Se calculan
+ * con la escala real del eje y se separan solas cuando dos valores quedan juntos.
+ */
+export function TagStack({ tags, axisId, ...chart }: { tags: Tag[]; axisId: string } & Record<string, unknown>) {
+  const axisMap = chart.yAxisMap as Record<string, { scale: (v: number) => number; x: number; y: number; height: number }> | undefined;
+  const axis = axisMap?.[axisId];
+  if (!axis) return null;
+  const top = axis.y;
+  const bottom = axis.y + axis.height;
+  const H = 16;
+  const placed = tags
+    .map((t) => ({ ...t, y: axis.scale(t.value) }))
+    .filter((t) => Number.isFinite(t.y) && t.y >= top - 2 && t.y <= bottom + 2)
+    .sort((a, b) => a.y - b.y);
+  // empuja hacia abajo las que se pisan y, si se salen, las sube desde el fondo
+  for (let i = 1; i < placed.length; i++) placed[i].y = Math.max(placed[i].y, placed[i - 1].y + H);
+  for (let i = placed.length - 1; i >= 0; i--) {
+    const limit = i === placed.length - 1 ? bottom - H / 2 : placed[i + 1].y - H;
+    placed[i].y = Math.min(placed[i].y, limit);
+  }
+  return (
+    <g>
+      {placed.map((t) => {
+        const label = price(t.value);
+        const w = Math.max(56, label.length * 7 + 10);
+        return (
+          <g key={t.key}>
+            <rect x={axis.x + 1} y={t.y - H / 2} width={w} height={H} rx={2} fill={t.color} />
+            <text x={axis.x + 5} y={t.y + 4} fontSize={11} fontFamily="IBM Plex Mono, monospace" fill={t.text}>
+              {label}
+            </text>
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+function levelLine(key: string, value: number | null, color: string, opts: { dash?: string; width?: number } = {}) {
+  if (value == null || Number.isNaN(value)) return null;
+  return <ReferenceLine key={key} yAxisId="p" y={value} ifOverflow="hidden" stroke={color} strokeWidth={opts.width ?? 1} strokeDasharray={opts.dash} />;
+}
+
 function PriceChart({
   points,
   mode,
+  levels,
   width,
   height,
 }: {
   points: OverlayPoint[];
   mode: "ma" | "bb";
+  levels: ChartLevels;
   width?: number;
   height?: number;
 }) {
-  const domain = priceDomain(points, mode);
+  const baseDomain = priceDomain(points, mode);
+  // el máximo histórico entra en la escala si está cerca; si está lejos se avisa arriba
+  let domain = baseDomain;
+  const athNear = levels.ath != null && levels.ath <= baseDomain[1] + (baseDomain[1] - baseDomain[0]) * 0.6;
+  if (levels.ath != null && athNear && levels.ath > baseDomain[1]) {
+    domain = [baseDomain[0], levels.ath + (baseDomain[1] - baseDomain[0]) * 0.05];
+  }
   const dots = points.length < 2;
   if (!width || !height) return null;
-  const last = points[points.length - 1]?.close;
+  const last = points[points.length - 1];
+  const up = last ? last.close >= last.open : true;
+  const tags: Tag[] = [];
+  const add = (key: string, value: number | null | undefined, color: string, text = "#000") => {
+    if (value != null && !Number.isNaN(value)) tags.push({ key, value, color, text });
+  };
+  if (mode === "ma") {
+    add("t20", last?.ma20, TC.ma20);
+    add("t40", last?.ma40, TC.ma40, "#fff");
+    add("t100", last?.ma100, TC.ma100);
+    add("t200", last?.ma200, TC.ma200, "#fff");
+  } else {
+    add("bu", last?.bbUpper, TC.band);
+    add("bm", last?.bbMid, TC.band);
+    add("bl", last?.bbLower, TC.band);
+  }
+  if (athNear) add("ath", levels.ath, TC.ath, "#fff");
+  add("open", levels.lastOpen, TC.open, "#fff");
+  add("close", levels.lastClose, TC.close);
+  add("now", last?.close, up ? TC.up : TC.down);
   return (
     <ComposedChart width={width} height={height} data={points} margin={{ top: 22, right: 0, left: 6, bottom: 0 }}>
       <CartesianGrid stroke={TC.grid} strokeWidth={1} />
@@ -305,7 +487,7 @@ function PriceChart({
         tick={{ fill: TC.axis, fontSize: 11 }}
         axisLine={{ stroke: TC.grid }}
         tickLine={false}
-        width={62}
+        width={66}
       />
       <Tooltip content={<OhlcTip mode={mode} />} cursor={{ stroke: "#555", strokeDasharray: "3 3" }} />
       {mode === "bb" ? (
@@ -324,7 +506,6 @@ function PriceChart({
         />
       ) : null}
       {mode === "bb" ? <Line yAxisId="p" type="monotone" dataKey="bbMid" name="Media 20" stroke={TC.band} dot={false} strokeWidth={1} connectNulls isAnimationActive={false} activeDot={false} /> : null}
-      {last != null ? <ReferenceLine yAxisId="p" y={last} stroke={TC.last} strokeDasharray="8 6" strokeWidth={1} /> : null}
       <Bar
         yAxisId="p"
         dataKey="close"
@@ -336,18 +517,32 @@ function PriceChart({
       {mode === "ma" ? <Line yAxisId="p" type="monotone" dataKey="ma40" name="MA 40" stroke="var(--color-ma40)" dot={dots} strokeWidth={1.25} connectNulls isAnimationActive={false} /> : null}
       {mode === "ma" ? <Line yAxisId="p" type="monotone" dataKey="ma100" name="MA 100" stroke="var(--color-ma100)" dot={dots} strokeWidth={1.25} connectNulls isAnimationActive={false} /> : null}
       {mode === "ma" ? <Line yAxisId="p" type="monotone" dataKey="ma200" name="MA 200" stroke="var(--color-ma200)" dot={dots} strokeWidth={1.25} connectNulls isAnimationActive={false} /> : null}
+      {athNear ? levelLine("ath", levels.ath, TC.ath, { width: 1.5 }) : null}
+      {levelLine("open", levels.lastOpen, TC.open, { dash: "7 5", width: 1.5 })}
+      {levelLine("close", levels.lastClose, TC.close, { dash: "7 5", width: 1.5 })}
+      <Customized component={(chart: Record<string, unknown>) => <TagStack {...chart} axisId="p" tags={tags} />} />
+      {levels.ath != null && !athNear ? <AthOffscreen value={levels.ath} x={width - 74} /> : null}
     </ComposedChart>
+  );
+}
+
+function AthOffscreen({ value, x }: { value: number; x: number }) {
+  return (
+    <text x={x} y={14} textAnchor="end" fontSize={11} fill={TC.ath} fontFamily="IBM Plex Mono, monospace">
+      ▲ Máx. histórico {price(value)} (fuera de escala)
+    </text>
   );
 }
 
 function WordenChart({ points, width, height }: { points: OverlayPoint[]; width?: number; height?: number }) {
   const maxVol = points.reduce((max, point) => Math.max(max, point.volume), 1);
   if (!width || !height) return null;
+  const last = points[points.length - 1]?.worden ?? null;
   return (
     <ComposedChart width={width} height={height} data={points} margin={{ top: 22, right: 0, left: 6, bottom: 0 }}>
       <CartesianGrid stroke={TC.grid} strokeWidth={1} />
       <XAxis dataKey="t" tickFormatter={axisTick} tick={{ fill: TC.axis, fontSize: 11 }} axisLine={{ stroke: TC.grid }} tickLine={false} minTickGap={36} />
-      <YAxis yAxisId="w" orientation="right" domain={[0, 100]} ticks={[20, 50, 80]} tick={{ fill: TC.axis, fontSize: 11 }} axisLine={{ stroke: TC.grid }} tickLine={false} width={40} />
+      <YAxis yAxisId="w" orientation="right" domain={[0, 100]} ticks={[20, 50, 80]} tick={{ fill: TC.axis, fontSize: 11 }} axisLine={{ stroke: TC.grid }} tickLine={false} width={66} />
       <YAxis yAxisId="v" hide domain={[0, 1]} />
       <Tooltip content={<OhlcTip mode="worden" />} />
       <Bar
@@ -361,6 +556,21 @@ function WordenChart({ points, width, height }: { points: OverlayPoint[]; width?
       <ReferenceLine yAxisId="w" y={50} stroke={TC.last} strokeDasharray="2 4" />
       <ReferenceLine yAxisId="w" y={20} stroke={TC.up} strokeOpacity={0.7} strokeDasharray="6 5" />
       <Line yAxisId="w" type="monotone" dataKey="worden" name="Worden" stroke={TC.band} dot={false} strokeWidth={1.5} connectNulls isAnimationActive={false} />
+      {last != null ? (
+        <ReferenceLine
+          yAxisId="w"
+          y={last}
+          stroke="none"
+          label={(props: { viewBox?: { x?: number; y?: number; width?: number } }) => (
+            <g>
+              <rect x={(props.viewBox?.x ?? 0) + (props.viewBox?.width ?? 0) + 1} y={(props.viewBox?.y ?? 0) - 8} width={40} height={16} rx={2} fill={TC.band} />
+              <text x={(props.viewBox?.x ?? 0) + (props.viewBox?.width ?? 0) + 5} y={(props.viewBox?.y ?? 0) + 4} fontSize={11} fontFamily="IBM Plex Mono, monospace" fill="#000">
+                {last.toFixed(1)}
+              </text>
+            </g>
+          )}
+        />
+      ) : null}
     </ComposedChart>
   );
 }
@@ -525,6 +735,9 @@ function ZoomChart({
   label,
   identity,
   onZoom,
+  total,
+  count,
+  setCount,
 }: {
   children: ReactElement;
   pending: boolean;
@@ -533,9 +746,14 @@ function ZoomChart({
   label: string;
   identity?: ChartIdentity;
   onZoom: () => void;
+  total: number;
+  count: number;
+  setCount: (n: number) => void;
 }) {
+  const ref = useWheelZoom(total, count, setCount);
   return (
     <div
+      ref={ref}
       role="button"
       tabIndex={0}
       aria-label={`Ampliar gráfico de ${label}`}
@@ -553,6 +771,21 @@ function ZoomChart({
       </ChartBox>
     </div>
   );
+}
+
+export function WheelBox({
+  total,
+  count,
+  setCount,
+  children,
+}: {
+  total: number;
+  count: number;
+  setCount: (n: number) => void;
+  children: ReactNode;
+}) {
+  const ref = useWheelZoom(total, count, setCount);
+  return <div ref={ref}>{children}</div>;
 }
 
 function ChartBox({

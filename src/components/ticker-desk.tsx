@@ -4,6 +4,7 @@ import {
   CartesianGrid,
   Cell,
   ComposedChart,
+  Customized,
   Line,
   ReferenceLine,
   ResponsiveContainer,
@@ -12,7 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import { Search } from "lucide-react";
-import { ChartLightbox, Studies, TC, Watermark, type ChartIdentity } from "@/components/studies";
+import { ChartLightbox, LevelsLegend, Studies, TC, TagStack, Watermark, WheelBox, sessionLevels, type ChartIdentity, type ChartLevels, type Tag } from "@/components/studies";
 import { analyzeTicker } from "@/lib/market/analyze.functions";
 import type { Analysis, SideRange } from "@/lib/market/types";
 import { rsiZone } from "@/lib/market/math";
@@ -334,6 +335,8 @@ export function DeskDetail({ row: selected }: { row: Analysis }) {
         ticker={selected.ticker}
         initial={selected.overlay}
         identity={{ ticker: selected.ticker, name: selected.name, sector: selected.sector, industry: selected.industry }}
+        ath={selected.allTimeHigh ?? null}
+        athDate={selected.allTimeHighDate ?? null}
       />
     </>
   );
@@ -399,30 +402,38 @@ function RangeCard({
 function IndicatorCharts({ row }: { row: Analysis }) {
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
-  const data = row.chart.filter((p) => p.rsi != null);
+  const all = row.chart.filter((p) => p.rsi != null);
+  const [count, setCount] = useState(Math.min(all.length, 90));
   const identity: ChartIdentity = { ticker: row.ticker, name: row.name, sector: row.sector, industry: row.industry };
-  if (data.length < 5) return null;
+  const levels = sessionLevels(row.overlay?.points ?? [], row.allTimeHigh ?? null, row.allTimeHighDate ?? null);
+  if (all.length < 5) return null;
+  const data = all.slice(-Math.max(5, Math.min(all.length, count)));
   return (
     <>
-      <p className="mt-4 text-xs text-muted">Toca el gráfico diario para ampliarlo.</p>
-      <section
-        className="mt-2 cursor-pointer rounded-lg border border-line bg-surface px-2 py-3 sm:px-4"
-        role="button"
-        tabIndex={0}
-        aria-label="Ampliar precio, MACD y RSI"
-        onClick={() => setOpen(true)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            setOpen(true);
-          }
-        }}
-      >
-        <DailyStack data={data} tall={false} identity={identity} />
-      </section>
+      <p className="mt-4 text-xs text-muted">Rueda del mouse sobre el gráfico para acercar o alejar; tócalo para ampliarlo.</p>
+      <WheelBox total={all.length} count={count} setCount={setCount}>
+        <section
+          className="mt-2 cursor-pointer rounded-lg border border-line bg-surface px-2 py-3 sm:px-4"
+          role="button"
+          tabIndex={0}
+          aria-label="Ampliar precio, MACD y RSI"
+          onClick={() => setOpen(true)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              setOpen(true);
+            }
+          }}
+        >
+          <DailyStack data={data} tall={false} identity={identity} levels={levels} />
+        </section>
+      </WheelBox>
       {open ? (
         <ChartLightbox title="Precio, MACD y RSI · diario" onClose={close}>
-          <DailyStack data={data} tall identity={identity} />
+          <LevelsLegend levels={levels} />
+          <WheelBox total={all.length} count={count} setCount={setCount}>
+            <DailyStack data={data} tall identity={identity} levels={levels} />
+          </WheelBox>
         </ChartLightbox>
       ) : null}
     </>
@@ -434,11 +445,20 @@ const tcTip = {
   labelStyle: { color: TC.axis },
 };
 
-function DailyStack({ data, tall, identity }: { data: Analysis["chart"]; tall: boolean; identity: ChartIdentity }) {
+function levelLine(y: number | null, color: string) {
+  if (y == null) return null;
+  return <ReferenceLine y={y} ifOverflow="hidden" stroke={color} strokeWidth={1.5} strokeDasharray="7 5" />;
+}
+
+function DailyStack({ data, tall, identity, levels }: { data: Analysis["chart"]; tall: boolean; identity: ChartIdentity; levels: ChartLevels }) {
   const priceH = tall ? "h-80" : "h-52";
   const oscH = tall ? "h-44" : "h-32";
   const last = data[data.length - 1]?.close;
   const axis = { fill: TC.axis, fontSize: 11 };
+  const priceTags: Tag[] = [];
+  if (levels.lastOpen != null) priceTags.push({ key: "open", value: levels.lastOpen, color: TC.open, text: "#fff" });
+  if (levels.lastClose != null) priceTags.push({ key: "close", value: levels.lastClose, color: TC.close, text: "#000" });
+  if (last != null) priceTags.push({ key: "now", value: last, color: "#e8e8e8", text: "#000" });
   return (
     <>
       <h3 className="px-2 text-sm text-fg">Precio, MACD y RSI · diario</h3>
@@ -450,10 +470,12 @@ function DailyStack({ data, tall, identity }: { data: Analysis["chart"]; tall: b
               <ComposedChart data={data} margin={{ top: 10, right: 0, left: 6, bottom: 0 }}>
                 <CartesianGrid stroke={TC.grid} />
                 <XAxis dataKey="date" hide />
-                <YAxis orientation="right" domain={["auto", "auto"]} tick={axis} axisLine={{ stroke: TC.grid }} tickLine={false} width={58} />
+                <YAxis orientation="right" domain={["auto", "auto"]} tick={axis} axisLine={{ stroke: TC.grid }} tickLine={false} width={62} />
                 <Tooltip {...tcTip} formatter={(value: number) => [money(value), "Cierre"]} />
-                {last != null ? <ReferenceLine y={last} stroke={TC.last} strokeDasharray="8 6" /> : null}
                 <Line type="monotone" dataKey="close" stroke="#e8e8e8" dot={false} strokeWidth={1.5} isAnimationActive={false} />
+                {levelLine(levels.lastOpen, TC.open)}
+                {levelLine(levels.lastClose, TC.close)}
+                <Customized component={(chart: Record<string, unknown>) => <TagStack {...chart} axisId="0" tags={priceTags} />} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -463,7 +485,7 @@ function DailyStack({ data, tall, identity }: { data: Analysis["chart"]; tall: b
             <ComposedChart data={data} margin={{ top: 8, right: 0, left: 6, bottom: 0 }}>
               <CartesianGrid stroke={TC.grid} />
               <XAxis dataKey="date" hide />
-              <YAxis orientation="right" tick={axis} axisLine={{ stroke: TC.grid }} tickLine={false} width={58} />
+              <YAxis orientation="right" tick={axis} axisLine={{ stroke: TC.grid }} tickLine={false} width={62} />
               <ReferenceLine y={0} stroke={TC.last} />
               <Tooltip {...tcTip} formatter={(value: number, name: string) => [Number(value).toFixed(2), name]} />
               <Bar dataKey="hist" isAnimationActive={false}>
@@ -481,7 +503,7 @@ function DailyStack({ data, tall, identity }: { data: Analysis["chart"]; tall: b
             <ComposedChart data={data} margin={{ top: 8, right: 0, left: 6, bottom: 0 }}>
               <CartesianGrid stroke={TC.grid} />
               <XAxis dataKey="date" tickFormatter={tickLabel} tick={axis} axisLine={{ stroke: TC.grid }} tickLine={false} minTickGap={36} />
-              <YAxis orientation="right" domain={[0, 100]} ticks={[30, 50, 70]} tick={axis} axisLine={{ stroke: TC.grid }} tickLine={false} width={58} />
+              <YAxis orientation="right" domain={[0, 100]} ticks={[30, 50, 70]} tick={axis} axisLine={{ stroke: TC.grid }} tickLine={false} width={62} />
               <ReferenceLine y={70} stroke={TC.down} strokeOpacity={0.7} strokeDasharray="6 5" />
               <ReferenceLine y={30} stroke={TC.up} strokeOpacity={0.7} strokeDasharray="6 5" />
               <Tooltip {...tcTip} formatter={(value: number) => [Number(value).toFixed(1), "RSI"]} />

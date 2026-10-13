@@ -82,6 +82,8 @@ export type Analysis = {
   put: SideRange | null;
   chart: ChartPoint[];
   overlay: OverlaySeries;
+  allTimeHigh: number | null;
+  allTimeHighDate: string | null;
   calendar: CalendarInfo;
   note: string;
 };
